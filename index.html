@@ -18826,7 +18826,7 @@ setTimeout(checkCloudOnStartup, 300);
 // ############################################################################
 
 // ★ デプロイするたびに、ここの番号と日付を書き換えてください
-const GAME_VERSION = 'v2.32.0';
+const GAME_VERSION = 'v2.32.1';
 const GAME_BUILD_DATE = '2026-11-05';
 
 // ============================================================================
@@ -19960,7 +19960,17 @@ function bot_stepToward(bfs, cells) {
   if (best < 0) return null;
   let cur = best;
   while (bfs.prev[cur] !== bfs.start) cur = bfs.prev[cur];
-  return { dx: (cur % MW) - p.x, dy: ((cur / MW) | 0) - p.y };
+  return { dx: (cur % MW) - p.x, dy: ((cur / MW) | 0) - p.y, tx: best % MW, ty: (best / MW) | 0 };
+}
+
+// 2マスを行ったり来たりしているか（敵がとなりにいないのに A→B→A→B→A→B）
+function bot_isBouncing() {
+  const t = bot.trail;
+  if (t.length < 6) return false;
+  const a = t[t.length - 1], b = t[t.length - 2];
+  if (a === b) return false;
+  for (let i = t.length - 6; i < t.length; i++) if (t[i] !== ((t.length - 1 - i) % 2 === 0 ? a : b)) return false;
+  return true;
 }
 
 
@@ -19990,6 +20000,10 @@ const bot = {
   arcadeOnly: null, // ゲームセンターの1つのゲームだけを遊び続ける（配信用）。ゲームの名前（'bomb' など）か null
   arcadeRound: 0,
   failStreak: 0, smithDoneFloor: -1, lastPos: '', stuck: 0,
+  trail: [],     // 最近いた場所（行ったり来たりを見つける）
+  goal: null,    // 行ったり来たりしたときに決めた行き先 { floor, x, y, left }
+  chase: null,   // 追いかけている敵 { e, floor, left }（7マスより離れても追い続ける）
+  ignore: null,  // 追いかけてもたどり着けなかった敵（しばらく追わない） { e, floor, until }
   itemDelay: null, // アイテムを使うのを何手あとにするか（すぐ使わずに歩いてから思い出す）
   wakeLock: null // 画面を点けたままにする（Wake Lock）
 };
@@ -20168,6 +20182,7 @@ async function bot_moveDelay(token) {
 async function bot_move(dx, dy, token) {
   bot_flashDpad(dx, dy);
   act(dx, dy);
+  if (p) { bot.trail.push(`${p.floor},${p.x},${p.y}`); if (bot.trail.length > 8) bot.trail.shift(); }
   await bot_moveDelay(token);
 }
 
@@ -20217,24 +20232,55 @@ async function bot_decideAndMove(token) {
   const bfs = bot_bfs();
   let step;
 
+  // 行ったり来たりの防止：2マスを往復していたら、そのとき向かっていた場所を「行き先」に決めて、着くまで迷わない
+  const bouncing = bot_isBouncing();
+  const go = async (s) => {
+    if (bouncing && !bot.goal) { bot.goal = { floor: p.floor, x: s.tx, y: s.ty, left: 30 }; bot.trail = []; }
+    await bot_move(s.dx, s.dy, token);
+  };
+  const g = bot.goal;
+  if (g) {
+    if (g.floor !== p.floor || g.left <= 0 || (p.x === g.x && p.y === g.y)) bot.goal = null;
+    else {
+      g.left--;
+      step = bot_stepToward(bfs, [[g.x, g.y]]);
+      if (step) { await bot_move(step.dx, step.dy, token); return; }
+      bot.goal = null;
+    }
+  }
+
   // 3. 見えている敵に近づく
   // 逃げるメタル系は追いかけ回さない（となりに来たときと、矢・杖で狙えるときだけ）
-  const chase = visible.filter(e => e.ability !== 'evade');
+  // 一度追いかけ始めた敵は、遠回りで7マスより離れても追い続ける（以前は7マスをこえると追うのをやめて引き返し、
+  // 壁の向こうの行き止まりにいる敵のときに左右へ行ったり来たりし続けていた）。40歩で着かなければしばらくあきらめる。
+  const ign = bot.ignore && bot.ignore.floor === p.floor && bot.ignore.until > (p.stepCount || 0) ? bot.ignore.e : null;
+  const ch = bot.chase;
+  if (ch && (ch.floor !== p.floor || !enemies.includes(ch.e) || ch.left <= 0)) {
+    if (ch.left <= 0 && enemies.includes(ch.e)) bot.ignore = { e: ch.e, floor: p.floor, until: (p.stepCount || 0) + 60 };
+    bot.chase = null;
+  }
+  const chase = visible.filter(e => e.ability !== 'evade' && e !== ign);
+  if (bot.chase && !chase.includes(bot.chase.e)) chase.push(bot.chase.e);
   if (chase.length) {
     step = bot_stepToward(bfs, chase.flatMap(e => BOT_DIRS.map(([ax, ay]) => [e.x + ax, e.y + ay])));
-    if (step) { await bot_move(step.dx, step.dy, token); return; }
+    if (step) {
+      const target = chase.find(e => bot_cheb(e.x, e.y, step.tx, step.ty) === 1);
+      if (target && bot.chase && bot.chase.e === target) bot.chase.left--;
+      else if (target) bot.chase = { e: target, floor: p.floor, left: 40 };
+      await go(step); return;
+    }
   }
 
   // 4. さすらいの鍛冶屋（このフロアでまだ寄っていなくて、お金があれば）
   if (typeof dungeonSmithNpc !== 'undefined' && dungeonSmithNpc && bot.smithDoneFloor !== p.floor && p.gold >= 800 && seen[dungeonSmithNpc.y]?.[dungeonSmithNpc.x]) {
     step = bot_stepToward(bfs, [[dungeonSmithNpc.x, dungeonSmithNpc.y]]);
-    if (step) { await bot_move(step.dx, step.dy, token); return; }
+    if (step) { await go(step); return; }
   }
 
   // 5. 見えているアイテム
   if (p.inventory.length < 40) {
     step = bot_stepToward(bfs, items.filter(i => seen[i.y]?.[i.x]).map(i => [i.x, i.y]));
-    if (step) { await bot_move(step.dx, step.dy, token); return; }
+    if (step) { await go(step); return; }
   }
 
   // 6. まだ見ていない場所
@@ -20250,13 +20296,13 @@ async function bot_decideAndMove(token) {
     }
   }
   step = bot_stepToward(bfs, frontier);
-  if (step) { await bot_move(step.dx, step.dy, token); return; }
+  if (step) { await go(step); return; }
 
   // 7. 階段
   if (stairs && stairs.x >= 0) {
     if (p.x === stairs.x && p.y === stairs.y) { confirmStairs(true); await bot_moveDelay(token); return; }
     step = bot_stepToward(bfs, [[stairs.x, stairs.y]]);
-    if (step) { await bot_move(step.dx, step.dy, token); return; }
+    if (step) { await go(step); return; }
   }
 
   // 8. することがなければ足踏み

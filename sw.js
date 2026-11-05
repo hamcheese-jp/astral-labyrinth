@@ -1,7 +1,7 @@
 // Astral Labyrinth DX アプリ版のサービスワーカー
 // いつもは新しいファイルを取りにいき（すぐ新しい版になる）、電波がないときだけ取っておいたものを出す。
 // サーバー（GAS）への問い合わせや、ほかの場所（フォント・物理の部品）は取っておかない。
-const CACHE = 'astral-mw2w84nj';
+const CACHE = 'astral-mw2x42yw';
 const FILES = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
