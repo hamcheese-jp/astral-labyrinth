@@ -8156,7 +8156,7 @@ function openInventory() {
     setTimeout(() => {
       p.inventory.forEach((it, idx) => {
         let canvas = document.getElementById(`inv-icon-${idx}`);
-        if (canvas) drawItemIcon(canvas.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0);
+        if (canvas) drawItemIcon(canvas.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0, it);
       });
     }, 15);
   }
@@ -8256,9 +8256,9 @@ function showEquipConfirmModal(newItem) {
 
   setTimeout(() => {
     let cCur = document.getElementById('cmp-cur-icon');
-    if (cCur && curItem) drawItemIcon(cCur.getContext('2d'), curItem.sprite || 'wep', curItem.color || '#38bdf8', curItem.rank || 1, curItem.subIdx || 0);
+    if (cCur && curItem) drawItemIcon(cCur.getContext('2d'), curItem.sprite || 'wep', curItem.color || '#38bdf8', curItem.rank || 1, curItem.subIdx || 0, curItem);
     let cNew = document.getElementById('cmp-new-icon');
-    if (cNew) drawItemIcon(cNew.getContext('2d'), newItem.sprite || 'wep', newItem.color || '#38bdf8', newItem.rank || 1, newItem.subIdx || 0);
+    if (cNew) drawItemIcon(cNew.getContext('2d'), newItem.sprite || 'wep', newItem.color || '#38bdf8', newItem.rank || 1, newItem.subIdx || 0, newItem);
   }, 15);
 }
 
@@ -8846,7 +8846,7 @@ function render3DScene(sc, bob, th, curRoom) {
     }
     const q = ob.q, s = q.s;
     if (ob.kind === 'item') {
-      const i = ob.o, cached = getCachedItemCanvas(i.sprite || 'wep', i.color || '#38bdf8', i.rank || 1, i.subIdx || 0), sz = T3 * 0.62 * s;
+      const i = ob.o, cached = getCachedItemCanvas(i.sprite || 'wep', i.color || '#38bdf8', i.rank || 1, i.subIdx || 0, i), sz = T3 * 0.62 * s;
       g.fillStyle = 'rgba(74,222,128,0.25)'; g.beginPath(); g.ellipse(q.x, q.y, T3 * 0.3 * s, T3 * 0.11 * s, 0, 0, Math.PI * 2); g.fill();
       g.drawImage(cached, q.x - sz / 2, q.y - sz * 0.95, sz, sz);
     } else if (ob.kind === 'smith') {
@@ -8962,7 +8962,7 @@ function renderLoop() {
           let ix = (i.x-camX)*T + T/2, iy = (i.y-camY)*T + T/2;
           ctx.fillStyle = "rgba(74, 222, 128, 0.18)";
           ctx.fillRect((i.x-camX)*T + 4, (i.y-camY)*T + 4, T - 8, T - 8);
-          let cached = getCachedItemCanvas(i.sprite || 'wep', i.color || '#38bdf8', i.rank || 1, i.subIdx || 0);
+          let cached = getCachedItemCanvas(i.sprite || 'wep', i.color || '#38bdf8', i.rank || 1, i.subIdx || 0, i);
           ctx.drawImage(cached, Math.round(ix - itemDrawSz/2), Math.round(iy - itemDrawSz/2), itemDrawSz, itemDrawSz);
         }
       });
@@ -9895,7 +9895,7 @@ function showItemDetailObject(it) {
   setTimeout(() => {
     let c = document.getElementById('idm-icon-cv');
     if (c && typeof drawItemIcon === 'function') {
-      drawItemIcon(c.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0);
+      drawItemIcon(c.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0, it);
     }
   }, 15);
 }
@@ -9955,7 +9955,7 @@ function openWarehouse() {
     setTimeout(() => {
       warehouse.forEach((it, idx) => {
         let canvas = document.getElementById(`wh-icon-${idx}`);
-        if (canvas) drawItemIcon(canvas.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0);
+        if (canvas) drawItemIcon(canvas.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0, it);
       });
     }, 15);
   }
@@ -10106,7 +10106,7 @@ function promptSellWarehouseItem(idx) {
   document.getElementById('warehouse-confirm-modal').style.display = 'flex';
   setTimeout(() => {
     let cv = document.getElementById('wh-cmp-cv');
-    if (cv) drawItemIcon(cv.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0);
+    if (cv) drawItemIcon(cv.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0, it);
   }, 15);
 }
 
@@ -10166,7 +10166,7 @@ function renderRefineList() {
     setTimeout(() => {
       equipIndices.forEach(({ it, idx }) => {
         let canvas = document.getElementById(`sm-icon-${idx}`);
-        if (canvas) drawItemIcon(canvas.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0);
+        if (canvas) drawItemIcon(canvas.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0, it);
       });
     }, 15);
   }
@@ -10211,7 +10211,7 @@ function promptRefineWarehouseEquip(idx, cost) {
   document.getElementById('smith-confirm-modal').style.display = 'flex';
   setTimeout(() => {
     let cv = document.getElementById('sm-cmp-cv');
-    if (cv) drawItemIcon(cv.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0);
+    if (cv) drawItemIcon(cv.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0, it);
   }, 15);
 }
 
@@ -10313,7 +10313,7 @@ function renderAbiRefineList() {
   }).join('');
   setTimeout(() => equips.forEach(({ it, idx }) => {
     const cv = document.getElementById(`abi-icon-${idx}`);
-    if (cv) drawItemIcon(cv.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0);
+    if (cv) drawItemIcon(cv.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0, it);
   }), 15);
 }
 
@@ -10369,7 +10369,7 @@ function renderAbiModal() {
       <div style="font-size:9.5px; color:#94a3b8; margin-top:6px;">作り直しのねだん：ロックなし 宝珠1個 → 1つ 3個 → 2つ 7個 → 3つ 15個（ゴールドも 1・3・8・20倍）</div>
     </div>`;
   m.style.display = 'flex';
-  setTimeout(() => { const cv = document.getElementById('abi-modal-cv'); if (cv) drawItemIcon(cv.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0); }, 15);
+  setTimeout(() => { const cv = document.getElementById('abi-modal-cv'); if (cv) drawItemIcon(cv.getContext('2d'), it.sprite || 'wep', it.color || '#38bdf8', it.rank || 1, it.subIdx || 0, it); }, 15);
 }
 function toggleAbiLock(i) {
   const it = warehouse[abiRefineIdx];
@@ -10661,7 +10661,7 @@ function playGachaAnimation(results, maxRank, type = 'card', pityHit = false) {
       const spec = typeof getCardFullSpec === 'function' ? getCardFullSpec(best.monster.n) : best.monster;
       bestImg = getMonsterCardCanvas(spec, 240, 336, false);
     } else if (typeof getCachedItemCanvas === 'function') {
-      if (best.item) bestImg = getCachedItemCanvas(best.item.sprite || 'wep', best.item.color || best.col, best.rank || 1, best.item.subIdx || 0);
+      if (best.item) bestImg = getCachedItemCanvas(best.item.sprite || 'wep', best.item.color || best.col, best.rank || 1, best.item.subIdx || 0, best.item);
       else bestImg = getCachedItemCanvas(best.sprite || 'item_pot', best.col, best.rank || 2, best.subIdx || 0);
     }
   } catch (e) { console.error(e); }
@@ -10803,7 +10803,7 @@ function renderGachaResultCards(results) {
       } else if (r.kind === 'orb') {
         drawAbiOrbIcon(ctxR, 42);
       } else if ((r.kind === 'equip' || r.kind === 'seed') && r.item && typeof drawItemIcon === 'function') {
-        drawItemIcon(ctxR, r.item.sprite || 'item_herb', r.item.color || r.col, r.rank || 1, r.item.subIdx || 0);
+        drawItemIcon(ctxR, r.item.sprite || 'item_herb', r.item.color || r.col, r.rank || 1, r.item.subIdx || 0, r.item);
       } else if (typeof drawItemIcon === 'function') {
         drawItemIcon(ctxR, r.sprite || 'item_pot', r.col, r.rank || 2, r.subIdx || 0);
       }
@@ -18826,7 +18826,7 @@ setTimeout(checkCloudOnStartup, 300);
 // ############################################################################
 
 // ★ デプロイするたびに、ここの番号と日付を書き換えてください
-const GAME_VERSION = 'v2.32.1';
+const GAME_VERSION = 'v2.32.2';
 const GAME_BUILD_DATE = '2026-11-05';
 
 // ============================================================================
@@ -19761,7 +19761,7 @@ function buildStatsInfo() {
   const depthFmt = d.bests.depth ? RANK_TABS.depth.fmt(d.bests.depth) : '';
   return Object.assign(dv, {
     ver: typeof GAME_VERSION !== 'undefined' ? GAME_VERSION : '', full: isFullVersionUnlocked(),
-    personalUrl: !!(typeof accessBoot !== 'undefined' && accessBoot.id), lang: navigator.language || '',
+    personalUrl: !!(typeof accessBoot !== 'undefined' && accessBoot.id), lang: navigator.language || '', tz: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) { return ''; } })(),
     playMin: Math.round((d.playSec || 0) / 60), sessions: d.sessions || 0, loginDays: d.login.total || 0, streak: d.login.streak || 0,
     cleared: MODE_ORDER.filter(k => cm[k]).map(k => EIGHT_MODES[k].name.replace(/（.*/, '').replace(/^\S+\s/, '')).join('・'),
     bestDepth: depthFmt, bestScore: d.bests.score || 0, arena: encyclopedia.maxStage || 1,
