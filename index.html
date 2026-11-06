@@ -18263,7 +18263,8 @@ window.__arcadeLoaded = true; // ここまで読み込めた印（extras の sho
 // ・グローバルの名前はすべて arcGoo〜（GAS の画面でほかの名前とぶつからないように長くする）
 // ============================================================================
 // ・遊び方：上の「たな」に次のスライムが4つまで並んでいる（天井にくっついてういている本物のスライム）。
-//   たなのスライムは真ん中へ寄っていき、真ん中のスライム（白いふち）を引っぱってはなすと、引いた向きの反対へ飛ぶ。
+//   たなのスライムをタップして選び（白いふち）、引っぱってはなすと、引いた向きの反対へまっすぐ飛ぶ（長く引くほど強く・矢印で表示）。
+//   速い間は重さもゆれもなくまっすぐ進み、水のブレーキで遅くなったら沈みはじめる。たなのスライムをたなのスライムに当てても合体できる。
 //   飛んだあとは右から新しいスライムがたなに入る。たなのスライムどうしも、同じ色がふれると合体する。
 //   飛んだスライムは、ほかのスライムやかべにふれるとくっついて勢いが止まり、そのあとは自分の重さでゆっくり沈む。
 //   下に積もったスライムが点線（たなの下）をこえたまま2.5秒で終わり
@@ -18274,7 +18275,8 @@ const ARC_GOO_L = 22, ARC_GOO_R = 418, ARC_GOO_B = 596, ARC_GOO_T = 100;
 const ARC_GOO_CX = (ARC_GOO_L + ARC_GOO_R) / 2;  // 打つ所（上の真ん中）
 const ARC_GOO_SHELF_N = 4;                       // たなに並ぶ数
 const ARC_GOO_LINE = ARC_GOO_T + 112;            // これより上まで積もったら危ない（点線）
-const ARC_GOO_MAXV = 820, ARC_GOO_PULLK = 5.5; // 飛ばす速さの上限・引いた長さ→速さ（水の中なので遅め）
+const ARC_GOO_MAXV = 900, ARC_GOO_MINV = 90, ARC_GOO_PULLMAX = 150; // 飛ばす速さ（引いた長さ14〜150で、90〜900）
+const ARC_GOO_FLYDRAG = 0.994, ARC_GOO_SLOWV = 150;  // まっすぐ飛ぶ間の水のブレーキ・これより遅くなったら沈みはじめる（1秒あたり）
 // 水の中：飛んでいる間のブレーキ（小さく分けた1回ごと）・浮く分だけ軽い重さ・くっついたあとの重さ
 const ARC_GOO_WATER = 0.991, ARC_GOO_FLYG = 0.42, ARC_GOO_STUCKG = 0.55;
 // 段ごとの色（v は点数の元）。大きさは1段ごとに約1.19倍
@@ -18305,13 +18307,19 @@ ARC_IMPL.goo = {
     }
     // 引っぱって飛ばす：おした所から指を動かした向きの反対へ飛ぶ（どこをおしてもよい）
     const area = document.getElementById('arc-wrap') || cv;
-    const down = e => { if (!arcGooSt || arcGooSt.over || !arcGooCurrent()) return; const p = arcPointer(cv, e); arcGooSt.drag = { sx: p.x, sy: p.y }; arcGooSt.pull = { x: 0, y: 0 }; };
+    const down = e => {
+      const st = arcGooSt; if (!st || st.over) return;
+      const p = arcPointer(cv, e), hit = arcGooShelfAt(p.x, p.y);
+      if (hit) { if (st.sel !== hit) arcSfx('ui'); st.sel = hit; }
+      const cur = arcGooCurrent(); if (!cur) return;
+      st.drag = { sx: p.x, sy: p.y, hx: cur.cx, hy: cur.cy }; st.pull = { x: 0, y: 0 };
+    };
     const move = e => { const st = arcGooSt; if (!st || !st.drag) return; const p = arcPointer(cv, e); st.pull = { x: p.x - st.drag.sx, y: p.y - st.drag.sy }; };
     const up = e => { const st = arcGooSt; if (!st || !st.drag) return; move(e); st.drag = null; arcGooLaunch(); };
     cv.onpointerdown = down; cv.onpointermove = move; cv.onpointerup = up; cv.onpointercancel = () => { if (arcGooSt) { arcGooSt.drag = null; arcGooSt.pull = null; } };
     area.onpointerdown = e => { if (e.target !== cv) down(e); }; area.onpointermove = move; area.onpointerup = up;
     if (typeof arcNoScroll === 'function') { arcNoScroll(cv, true); if (area !== cv) arcNoScroll(area, true); }
-    document.getElementById('arc-controls').innerHTML = '<div style="font-size:12px; color:#f5d0fe; padding:6px;">👆 画面をおして、飛ばしたい向きの<b>反対</b>へ引っぱってはなす（長く引くほど強い）。上のたなの真ん中（白いふち）のスライムが飛ぶ。同じ色がくっつくと合体！</div>';
+    document.getElementById('arc-controls').innerHTML = '<div style="font-size:12px; color:#f5d0fe; padding:6px;">👆 画面をおして、飛ばしたい向きの<b>反対</b>へ引っぱってはなす（長く引くほど強い）。上のたなのスライムをタップして選べる（白いふち）。同じ色がくっつくと合体！</div>';
     return Promise.resolve();
   },
   stop() { arcGooSt = null; },
@@ -18326,9 +18334,10 @@ ARC_IMPL.goo = {
     const st = arcGooSt;
     if (!st || !down) return;
     const p = st.pull || (st.pull = { x: 0, y: -60 });
+    const c0 = arcGooCurrent(); if (c0 && !st.drag) st.drag = { sx: 0, sy: 0, hx: c0.cx, hy: c0.cy, key: true };
     if (k === 'ArrowLeft') p.x -= 10; else if (k === 'ArrowRight') p.x += 10;
     else if (k === 'ArrowUp') p.y -= 10; else if (k === 'ArrowDown') p.y += 10;
-    else if (k === ' ' || k === 'Enter') { e.preventDefault(); arcGooLaunch(); }
+    else if (k === ' ' || k === 'Enter') { e.preventDefault(); st.drag = null; arcGooLaunch(); }
   },
   update(dt) {
     const st = arcGooSt;
@@ -18390,34 +18399,44 @@ function arcGooRand() { return Math.floor(Math.random() * Math.random() * 5.4); 
 function arcGooTop(b) { let m = 1e9; for (let i = 0; i < b.n; i++) m = Math.min(m, b.y[i]); return m; }
 // 今打つスライム：たなの中でいちばん真ん中に近いもの（出てきたばかりのものは除く）
 function arcGooCurrent() {
-  const q = arcGooQueue(), b = q[0];
-  return b && b.born >= 0.9 && Math.abs(b.cx - ARC_GOO_CX) < 26 ? b : null;
+  const st = arcGooSt; if (!st) return null;
+  const q = arcGooQueue();
+  let b = st.sel && st.sel.shelf && !st.sel.merged && st.bodies.includes(st.sel) ? st.sel : null;
+  if (!b) { b = q[0] || null; st.sel = b; }
+  return b && b.born >= 0.9 ? b : null;
+}
+// おした所にあるたなのスライム
+function arcGooShelfAt(x, y) {
+  const st = arcGooSt; let best = null, bd = 1e9;
+  st.bodies.forEach(b => { if (!b.shelf || b.merged) return; const d = Math.hypot(x - b.cx, y - b.cy); if (d < b.r + 10 && d < bd) { bd = d; best = b; } });
+  return best;
 }
 // たなの列（入った順）。先頭は真ん中、そのあとは右へすき間なく並ぶ場所 b.tx を決める
 function arcGooQueue() {
   const st = arcGooSt; if (!st) return [];
   const q = st.bodies.filter(b => b.shelf && !b.merged).sort((a, b) => a.qi - b.qi);
-  let x = ARC_GOO_CX;
-  q.forEach((b, i) => { const r = b.r * (0.62 + 0.38 * Math.min(1, b.born)); if (i) x += r; b.tx = x; x += r; });
+  const rr = q.map(b => b.r * (0.62 + 0.38 * Math.min(1, b.born))), total = rr.reduce((a, c) => a + c * 2, 0);
+  let x = Math.max(ARC_GOO_L + 2, ARC_GOO_CX - total / 2);
+  q.forEach((b, i) => { b.tx = x + rr[i]; x += rr[i] * 2; });
   return q;
 }
 // たなの右のはしに、新しいスライムが入る場所があるか
 function arcGooShelfFree(lvl) {
   const r = ARC_GOO_LEVELS[lvl].r, q = arcGooQueue(), last = q[q.length - 1];
-  const end = last ? Math.max(last.tx + last.r, last.maxX) : ARC_GOO_CX - r;
-  return end + r * 2 <= ARC_GOO_R + 2 && !arcGooSt.bodies.some(b => !b.shelf && b.maxX > ARC_GOO_R - r * 2 - 4 && b.minY < ARC_GOO_T + r * 2);
+  const total = q.reduce((a, b) => a + b.r * 2, 0) + r * 2;
+  return total <= ARC_GOO_R - ARC_GOO_L - 6 && (!last || last.maxX < ARC_GOO_R - r * 2 + 6) && !arcGooSt.bodies.some(b => !b.shelf && b.maxX > ARC_GOO_R - r * 2 - 4 && b.minY < ARC_GOO_T + r * 2);
 }
 // 引っぱった長さ → 飛ばす速さ（引いた向きの反対）
+function arcGooPower(pull) { return Math.max(0, Math.min(1, (Math.hypot(pull.x, pull.y) - 14) / (ARC_GOO_PULLMAX - 14))); }
 function arcGooVel(pull) {
-  let vx = -pull.x * ARC_GOO_PULLK, vy = -pull.y * ARC_GOO_PULLK;
-  const v = Math.hypot(vx, vy);
-  if (v > ARC_GOO_MAXV) { vx *= ARC_GOO_MAXV / v; vy *= ARC_GOO_MAXV / v; }
-  return { vx, vy };
+  const len = Math.hypot(pull.x, pull.y) || 1, sp = ARC_GOO_MINV + (ARC_GOO_MAXV - ARC_GOO_MINV) * arcGooPower(pull);
+  return { vx: -pull.x / len * sp, vy: -pull.y / len * sp };
 }
 // 引っぱっている間、真ん中のスライムが寄っていく所（指の向きへ少しだけ）
 function arcGooHoldSpot(b, pull) {
-  const len = Math.hypot(pull.x, pull.y) || 1, k = Math.min(1, 50 / len) * 0.45;
-  return { x: Math.max(ARC_GOO_L + b.r, Math.min(ARC_GOO_R - b.r, ARC_GOO_CX + pull.x * k)), y: Math.max(ARC_GOO_T + b.r * 0.7, Math.min(ARC_GOO_T + b.r + 60, ARC_GOO_T + b.r + 2 + pull.y * k)) };
+  const len = Math.hypot(pull.x, pull.y) || 1, k = Math.min(1, 50 / len) * 0.45, d = arcGooSt.drag;
+  const hx = d && d.hx !== undefined ? d.hx : (b.tx !== undefined ? b.tx : b.cx), hy = d && d.hy !== undefined ? d.hy : ARC_GOO_T + b.r + 2;
+  return { x: Math.max(ARC_GOO_L + b.r, Math.min(ARC_GOO_R - b.r, hx + pull.x * k * 0.6)), y: Math.max(hy, Math.min(ARC_GOO_T + b.r + 50, hy + pull.y * k)) }; // 上へは動かさない（天井でつぶれないように）
 }
 
 // やわらかい体を1つ作る（中心 cx, cy・段 lvl）
@@ -18456,8 +18475,7 @@ function arcGooLaunch() {
   if (!b || !pull || Math.hypot(pull.x, pull.y) < 14) return;
   const v = arcGooVel(pull), h = 1 / 60 / ARC_GOO_SUB;
   for (let i = 0; i < b.n; i++) { b.ox[i] = b.x[i] - v.vx * h; b.oy[i] = b.y[i] - v.vy * h; }
-  for (let i = 0; i < b.n; i++) { const k = 0.85, dx = b.x[i] - b.cx; b.x[i] = b.cx + dx * k; b.ox[i] -= dx * (1 - k); } // ぽんっと出る（横につぶれて、ぷるんと戻る）
-  b.shelf = false; b.stuck = false; b.flyT = 0;
+  b.shelf = false; b.stuck = false; b.flyT = 0; b.sinking = false; st.sel = null;
   arcSfx('eat');
   arcGooAddBubbles(b.cx, b.cy, 10, b.r * 0.8, 60); // ぽんっと出るときの泡
   st.shots++; st.refillT = Math.max(st.refillT, 0.25);
@@ -18471,7 +18489,11 @@ function arcGooFlightPath(pull, lvl, from) {
   let x = cur.cx, y = cur.cy, vx = v.vx, vy = v.vy;
   const h = 1 / 60 / ARC_GOO_SUB, others = st ? st.bodies.filter(b => b !== cur && (b.stuck || b.shelf)) : [];
   for (let i = 0; i < 110; i++) {
-    for (let k = 0; k < ARC_GOO_SUB; k++) { vx *= ARC_GOO_WATER; vy = vy * ARC_GOO_WATER + ARC_GOO_GRAV * ARC_GOO_FLYG * h; x += vx * h; y += vy * h; }
+    for (let k = 0; k < ARC_GOO_SUB; k++) {
+      if (Math.hypot(vx, vy) > ARC_GOO_SLOWV) { vx *= ARC_GOO_FLYDRAG; vy *= ARC_GOO_FLYDRAG; }
+      else { vx *= ARC_GOO_WATER; vy = vy * ARC_GOO_WATER + ARC_GOO_GRAV * ARC_GOO_FLYG * h; }
+      x += vx * h; y += vy * h;
+    }
     if (i > 2 && others.some(b => Math.hypot(x - b.cx, y - b.cy) < r + b.r * 0.8)) { pts.push([x, y, true]); break; } // ほかのスライムに当たる所
     if (x < ARC_GOO_L + r || x > ARC_GOO_R - r || y < ARC_GOO_T + r || y > ARC_GOO_B - r) { pts.push([Math.max(ARC_GOO_L + r, Math.min(ARC_GOO_R - r, x)), Math.max(ARC_GOO_T + r, Math.min(ARC_GOO_B - r, y)), true]); break; }
     if (i % 3 === 0) pts.push([x, y, false]);
@@ -18494,11 +18516,21 @@ function arcGooWorldStep(dt) {
       let sway = b.stuck || shelfOrHeld ? 0 : Math.sin(st.t * 1.1 + b.cy * 0.02) * gh * 0.06; // 水の流れ
       if (b.shelf && !b.held && b.tx !== undefined) sway = Math.max(-0.12, Math.min(0.12, (b.tx - b.cx) * 0.004));
       let hx = 0, hy = 0;
+      const flying = !b.stuck && !shelfOrHeld && b.flyT !== undefined && !b.sinking;
+      if (flying) {
+        let mx = 0, my = 0; for (let i = 0; i < b.n; i++) { mx += b.x[i] - b.ox[i]; my += b.y[i] - b.oy[i]; } mx /= b.n; my /= b.n;
+        if (Math.hypot(mx, my) / h < ARC_GOO_SLOWV) b.sinking = true;
+        else for (let i = 0; i < b.n; i++) { // まっすぐ：まわる動きを消す・水のブレーキ（弱め）
+          const vx = b.x[i] - b.ox[i], vy = b.y[i] - b.oy[i];
+          b.ox[i] = b.x[i] - (mx + (vx - mx) * 0.6) * ARC_GOO_FLYDRAG / damp; b.oy[i] = b.y[i] - (my + (vy - my) * 0.6) * ARC_GOO_FLYDRAG / damp;
+        }
+      }
+      const gg2 = flying && !b.sinking ? 0 : gg; if (flying && !b.sinking) sway = 0;
       if (b.held && st.pull) { const hs = arcGooHoldSpot(b, st.pull); hx = (hs.x - b.cx) * 0.05; hy = (hs.y - b.cy) * 0.05; }
       for (let i = 0; i < b.n; i++) {
         const vx = (b.x[i] - b.ox[i]) * damp, vy = (b.y[i] - b.oy[i]) * damp;
         b.ox[i] = b.x[i]; b.oy[i] = b.y[i];
-        b.x[i] += vx + sway + hx; b.y[i] += vy + gg + hy;
+        b.x[i] += vx + sway + hx; b.y[i] += vy + gg2 + hy;
       }
     }
     for (let it = 0; it < ARC_GOO_ITER; it++) {
@@ -18608,14 +18640,14 @@ function arcGooCollide(pairsOut) {
         const j = (e.i + 1) % Q.n;
         Q.x[e.i] -= dx * (1 - e.t); Q.y[e.i] -= dy * (1 - e.t);
         Q.x[j] -= dx * e.t; Q.y[j] -= dy * e.t;
-        if (inside && !P.stuck) { // 飛んできた方だけ、ぶつかった向きの速さを少し消す（とろっと受け止める。積もったものどうしは止めない＝重さで沈む）
+        if (inside && !P.stuck && !Q.shelf) { // 飛んできた方だけ、ぶつかった向きの速さを少し消す（とろっと受け止める。積もったものどうしは止めない＝重さで沈む）
           P.ox[i] += (P.x[i] - P.ox[i]) * 0.15; P.oy[i] += (P.y[i] - P.oy[i]) * 0.15;
         }
       }
     }
     if (touch) { // たなのスライムにふれただけでは、飛んでいる方はくっつかない（たなをこすって下へ行ける）
-      if (!C.shelf || A.stuck) arcGooStick(A);
-      if (!A.shelf || C.stuck) arcGooStick(C);
+      if (!C.shelf || A.stuck || A.flyT > 0.15) arcGooStick(A);
+      if (!A.shelf || C.stuck || C.flyT > 0.15) arcGooStick(C);
       arcGooSeparate(A, C);
     }
     if (pairsOut && touch >= 2 && A.lvl === C.lvl) pairsOut.push([A, C]);
@@ -18652,8 +18684,8 @@ function arcGooMerge(a, b) {
     const nr = ARC_GOO_LEVELS[nl].r * 0.6;
     const nb = arcGooMake(nl, Math.max(ARC_GOO_L + nr, Math.min(ARC_GOO_R - nr, x)), Math.max(ARC_GOO_T + nr, Math.min(y, ARC_GOO_B - nr)), 0.75);
     nb.born = 0; nb.dropT = 2;
-    if (a.shelf && b.shelf) { // たなどうしの合体はたなに残る（列の順番は前の方を引きつぐ。天井の高さへ）
-      nb.shelf = true; nb.qi = Math.min(a.qi, b.qi);
+    if ((a.shelf || b.shelf) && y < ARC_GOO_LINE) { // たなの所での合体はたなに残る（列の順番は前の方を引きつぐ。天井の高さへ）
+      nb.shelf = true; nb.qi = Math.min(a.shelf ? a.qi : 1e9, b.shelf ? b.qi : 1e9);
       const dy = ARC_GOO_T + nr / 0.6 * 0.75 + 2 - nb.cy; for (let i = 0; i < nb.n; i++) { nb.y[i] += dy; nb.oy[i] += dy; } arcGooBox(nb);
     } else nb.stuck = true;
     gain = ARC_GOO_LEVELS[nl].v; st.maxLvl = Math.max(st.maxLvl, nl);
@@ -18811,8 +18843,6 @@ function arcGooDraw(g) {
   const warn = st.overT > 0 ? 0.5 + Math.sin(performance.now() / 80) * 0.4 : 0;
   g.save(); g.setLineDash([8, 7]); g.lineWidth = 2; g.strokeStyle = warn ? 'rgba(248,113,113,' + (0.5 + warn * 0.5) + ')' : 'rgba(240,171,252,0.45)';
   g.beginPath(); g.moveTo(ARC_GOO_L, ARC_GOO_LINE); g.lineTo(ARC_GOO_R, ARC_GOO_LINE); g.stroke(); g.restore();
-  // 打つ所（天井の真ん中の目印）
-  g.fillStyle = '#f0abfc'; g.beginPath(); g.moveTo(ARC_GOO_CX - 10, ARC_GOO_T - 6); g.lineTo(ARC_GOO_CX + 10, ARC_GOO_T - 6); g.lineTo(ARC_GOO_CX, ARC_GOO_T + 3); g.closePath(); g.fill();
   // 上の表示
   arcText(g, `${st.score.toLocaleString()}点`, 14, 24, 22, '#fff', 'left');
   arcRoundRect(g, 366, 6, 66, 74, 10); g.fillStyle = 'rgba(15,10,31,0.85)'; g.fill(); g.strokeStyle = '#f0abfc'; g.lineWidth = 1.5; g.stroke();
@@ -18830,14 +18860,23 @@ function arcGooDraw(g) {
     arcGooPath(g, cur); g.lineWidth = 3.5; g.strokeStyle = 'rgba(255,255,255,' + (0.75 + 0.25 * Math.sin(st.t * 5)) + ')'; g.stroke();
     const pull = st.pull && Math.hypot(st.pull.x, st.pull.y) >= 4 ? st.pull : null;
     if (pull) {
-      arcGooFlightPath(pull, cur.lvl, cur).forEach(([x, y, end], i) => {
-        g.globalAlpha = end ? 0.8 : Math.max(0.15, 0.8 - i * 0.04); g.fillStyle = end ? '#fde047' : '#fff';
-        g.beginPath(); g.arc(x, y, end ? 5 : 3, 0, Math.PI * 2); g.fill();
-      });
-      g.globalAlpha = 1;
-      // ゴム（天井の真ん中の左右からスライムへ）
-      g.strokeStyle = '#f0abfc'; g.lineWidth = 3;
-      g.beginPath(); g.moveTo(ARC_GOO_CX - 30, ARC_GOO_T); g.lineTo(cur.cx, cur.cy); g.lineTo(ARC_GOO_CX + 30, ARC_GOO_T); g.stroke();
+      // 矢印：飛ぶ向き。長さと色が強さ（緑→黄→赤）
+      const pw = arcGooPower(pull), v = arcGooVel(pull), sp = Math.hypot(v.vx, v.vy) || 1, ux = v.vx / sp, uy = v.vy / sp;
+      const x0 = cur.cx + ux * (cur.r + 6), y0 = cur.cy + uy * (cur.r + 6), L = 26 + pw * 110, x1 = x0 + ux * L, y1 = y0 + uy * L;
+      const col = pw < 0.5 ? 'rgb(' + Math.round(74 + pw * 2 * 176) + ',222,' + Math.round(128 - pw * 2 * 100) + ')' : 'rgb(250,' + Math.round(222 - (pw - 0.5) * 2 * 150) + ',28)';
+      g.save(); g.lineCap = 'round'; g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = 11; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+      g.strokeStyle = col; g.lineWidth = 7; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+      const hs = 13 + pw * 5, px = -uy, py = ux;
+      g.fillStyle = col; g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(x1 + ux * hs, y1 + uy * hs); g.lineTo(x1 + px * hs * 0.75, y1 + py * hs * 0.75); g.lineTo(x1 - px * hs * 0.75, y1 - py * hs * 0.75); g.closePath(); g.fill(); g.stroke();
+      // 強さのめもり（スライムの下）
+      const bw = 64, bx = cur.cx - bw / 2, by = Math.min(cur.maxY + 8, ARC_GOO_LINE - 12);
+      arcRoundRect(g, bx, by, bw, 7, 3); g.fillStyle = 'rgba(15,10,31,0.75)'; g.fill();
+      arcRoundRect(g, bx, by, Math.max(4, bw * pw), 7, 3); g.fillStyle = col; g.fill();
+      g.restore();
+      // ゴム（もとの場所からスライムへ）
+      const d = st.drag;
+      if (d && d.hx !== undefined) { g.strokeStyle = 'rgba(240,171,252,0.8)'; g.lineWidth = 3; g.beginPath(); g.moveTo(d.hx - 18, ARC_GOO_T); g.lineTo(cur.cx, cur.cy); g.lineTo(d.hx + 18, ARC_GOO_T); g.stroke(); }
     }
   }
   st.drops.forEach(d => { g.globalAlpha = Math.min(1, d.t * 2); g.fillStyle = d.col; g.beginPath(); g.arc(d.x, d.y, d.r, 0, Math.PI * 2); g.fill(); });
@@ -19536,7 +19575,7 @@ setTimeout(checkCloudOnStartup, 300);
 // ############################################################################
 
 // ★ デプロイするたびに、ここの番号と日付を書き換えてください
-const GAME_VERSION = 'v2.34.1';
+const GAME_VERSION = 'v2.35.0';
 const GAME_BUILD_DATE = '2026-11-06';
 
 // ============================================================================
@@ -21782,33 +21821,36 @@ async function bot_arcMerge(token) {
   await bot_wait(450, 900, token);
 }
 
-// 🍬 くっつきスライム：上のたなの真ん中のスライムを、同じ色のスライムに当たる引き方で飛ばす（なければ下の低い所へ）。指を少しずつ引いてはなす
+// 🍬 くっつきスライム：たなのスライムの中から、同じ色のスライムに当たる1つと引き方を選んで（タップして選ぶ）飛ばす。なければ下の低い所へ。指を少しずつ引いてはなす
 async function bot_arcGoo(token) {
   const st = typeof arcGooSt !== 'undefined' ? arcGooSt : null;
   if (!st || st.over) { await bot_wait(300, 500, token); return; }
-  const cur = arcGooCurrent();
-  if (!cur || Math.abs(cur.cx - ARC_GOO_CX) > 40) { await bot_wait(120, 240, token); return; } // 真ん中に寄るまで待つ
-  const targets = st.bodies.filter(b => b !== cur && !b.shelf && b.stuck && b.lvl === cur.lvl);
+  const shelf = st.bodies.filter(b => b.shelf && !b.merged && b.born >= 0.9);
+  if (!shelf.length) { await bot_wait(120, 240, token); return; }
   let best = null, bestScore = -1e9;
-  for (let a = 0.12; a <= Math.PI - 0.12; a += 0.07) for (let p = 30; p <= 160; p += 10) {
-    const pull = { x: -Math.cos(a) * p, y: -Math.sin(a) * p };
-    const path = arcGooFlightPath(pull, cur.lvl, cur), end = path[path.length - 1];
-    if (!end) continue;
-    let sc = 0;
-    if (targets.length) {
-      let dmin = 1e9;
-      path.forEach(([x, y]) => targets.forEach(t => { dmin = Math.min(dmin, Math.hypot(x - t.cx, y - t.cy) - t.r); }));
-      sc = -dmin * 2;
-    } else sc = end[1] * 0.5; // 下の低い所へ
-    if (end[1] < ARC_GOO_LINE + 40) sc -= 400; // 点線の近くに止まりそうな道すじはさける
-    sc += bot_rand(0, 25);
-    if (sc > bestScore) { bestScore = sc; best = pull; }
-  }
-  if (!best) best = { x: 0, y: -90 };
+  shelf.forEach(cur => {
+    const targets = st.bodies.filter(b => b !== cur && !b.shelf && b.stuck && b.lvl === cur.lvl);
+    for (let a = 0.12; a <= Math.PI - 0.12; a += 0.09) for (let p = 30; p <= 150; p += 15) {
+      const pull = { x: -Math.cos(a) * p, y: -Math.sin(a) * p };
+      const path = arcGooFlightPath(pull, cur.lvl, cur), end = path[path.length - 1];
+      if (!end) continue;
+      let sc = 0;
+      if (targets.length) {
+        let dmin = 1e9;
+        path.forEach(([x, y]) => targets.forEach(t => { dmin = Math.min(dmin, Math.hypot(x - t.cx, y - t.cy) - t.r); }));
+        sc = -dmin * 2;
+      } else sc = end[1] * 0.5 - 60; // 下の低い所へ
+      if (end[1] < ARC_GOO_LINE + 40) sc -= 400; // 点線の近くに止まりそうな道すじはさける
+      sc += bot_rand(0, 25);
+      if (sc > bestScore) { bestScore = sc; best = { cur, pull }; }
+    }
+  });
+  if (!best) best = { cur: shelf[0], pull: { x: 0, y: -90 } };
+  if (st.sel !== best.cur) { st.sel = best.cur; await bot_wait(250, 600, token); } // タップして選ぶ
   const steps = 8 + Math.floor(Math.random() * 6);
-  for (let i = 1; i <= steps; i++) { st.pull = { x: best.x * i / steps, y: best.y * i / steps }; await bot_wait(30, 60, token); }
+  for (let i = 1; i <= steps; i++) { if (arcGooSt !== st || st.sel !== best.cur) return; st.pull = { x: best.pull.x * i / steps, y: best.pull.y * i / steps }; await bot_wait(30, 60, token); }
   await bot_wait(200, 500, token);
-  if (arcGooSt === st && !st.over) { st.pull = best; arcGooLaunch(); }
+  if (arcGooSt === st && !st.over && st.sel === best.cur) { st.pull = best.pull; arcGooLaunch(); } else if (arcGooSt === st) st.pull = null;
   await bot_wait(600, 1100, token);
 }
 
