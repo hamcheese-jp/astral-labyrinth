@@ -17075,8 +17075,9 @@ ARC_IMPL.merge = {
     arcMergeSt.pops.forEach(pp => pp.t -= dt); arcMergeSt.pops = arcMergeSt.pops.filter(pp => pp.t > 0);
     arcMergeSt.drops.forEach(d => { d.x += d.vx * dt; d.y += d.vy * dt; d.vy += 700 * dt; d.t -= dt; }); arcMergeSt.drops = arcMergeSt.drops.filter(d => d.t > 0);
     arcMergeSt.engine.world.bodies.forEach(b => { if (b.label === 'mon') { b.dropT = (b.dropT || 0) + dt; amgWobStep(b, dt); } });
+    amgJellyStep(Math.min(dt, 1 / 30));
     // あふれ判定：線より上に止まっているスライムが2秒続いたら終わり
-    const above = arcMergeSt.engine.world.bodies.some(b => b.label === 'mon' && b.dropT > 1.2 && b.position.y - b.circleRadius < AMG_LINE);
+    const above = arcMergeSt.engine.world.bodies.some(b => b.label === 'mon' && b.dropT > 1.2 && b.position.y - arcMergeSt.tiers[b.tier].r * 0.92 < AMG_LINE);
     arcMergeSt.overT = above ? arcMergeSt.overT + dt : 0;
     if (arcMergeSt.overT > 2.2) {
       arcMergeSt.over = true;
@@ -17089,9 +17090,11 @@ function amgRandTier() { return Math.floor(Math.random() * Math.random() * 5); }
 function amgClampAim(tier) { const r = arcMergeSt.tiers[tier].r; return Math.max(AMG_LEFT + r, Math.min(AMG_RIGHT - r, arcMergeSt.aim)); }
 function amgMakeBall(tier, x, y) {
   const t = arcMergeSt.tiers[tier];
-  const b = arcMergeSt.M.Bodies.circle(x, y, t.r, { restitution: 0.12, friction: 0.2, frictionStatic: 0.3, density: 0.0012, label: 'mon' });
+  // 当たりの丸は見た目より少し小さく：となりのスライムと少し重なって、ぺたっとつぶれて見える（amgJellyStep）
+  const b = arcMergeSt.M.Bodies.circle(x, y, t.r * AMG_HIT_SCALE, { restitution: 0.02, friction: 0.06, frictionStatic: 0.12, frictionAir: 0.012, density: 0.0012, label: 'mon' });
   b.tier = tier; b.dropT = 0;
-  b.wob = { sq: 0, sv: 0, amp: 0, ph: Math.random() * 6, born: 1, blink: 2 + Math.random() * 3 };
+  b.wob = { sq: 0, sv: 0, amp: 0, ph: Math.random() * 6, born: 1, blink: 2 + Math.random() * 3,
+    rr: new Float32Array(AMG_JN).fill(1), rv: new Float32Array(AMG_JN) };
   arcMergeSt.M.Composite.add(arcMergeSt.engine.world, b);
   return b;
 }
@@ -17106,6 +17109,69 @@ function amgWobStep(b, dt) {
   w.born = Math.min(1, w.born + dt * 2.6);
   w.blink -= dt; if (w.blink < -0.12) w.blink = 2 + Math.random() * 4;
 }
+// ぷるんぷるん・とろとろ：体のふちを AMG_JN 個の点（中心からの長さ rr）にして、1つずつばねで動かす
+// ・かべ・床・となりのスライムに当たる向きは平らにつぶれ（となりとは大きさに合わせて境目を決める）
+// ・つぶれた分だけ、ほかの向きがふくらむ（体の大きさは変わらない）。となりの点となじませて、とろっとした形に
+const AMG_JN = 30, AMG_HIT_SCALE = 0.86;
+const AMG_JDIR = Array.from({ length: AMG_JN }, (_, i) => { const a = i / AMG_JN * Math.PI * 2 - Math.PI / 2; return [Math.cos(a), Math.sin(a)]; });
+function amgJellyStep(dt) {
+  const mons = arcMergeSt.engine.world.bodies.filter(b => b.label === 'mon' && b.wob && b.wob.rr);
+  const lim = new Float32Array(AMG_JN);
+  for (const b of mons) {
+    const w = b.wob, r = arcMergeSt.tiers[b.tier].r * (0.35 + 0.65 * arcElastic(w.born));
+    const x = b.position.x, y = b.position.y;
+    lim.fill(1.4);
+    for (let i = 0; i < AMG_JN; i++) {
+      const [ux, uy] = AMG_JDIR[i];
+      if (ux < -0.02) lim[i] = Math.min(lim[i], (x - AMG_LEFT) / (-ux * r));
+      if (ux > 0.02) lim[i] = Math.min(lim[i], (AMG_RIGHT - x) / (ux * r));
+      if (uy > 0.02) lim[i] = Math.min(lim[i], (AMG_BOTTOM - y) / (uy * r));
+    }
+    for (const o of mons) {
+      if (o === b) continue;
+      const ro = arcMergeSt.tiers[o.tier].r * (0.35 + 0.65 * arcElastic(o.wob.born));
+      const dx = o.position.x - x, dy = o.position.y - y, D = Math.hypot(dx, dy);
+      if (D >= (r + ro) * 1.04 || D < 0.01) continue;
+      const nx = dx / D, ny = dy / D, s = D * r / (r + ro) + 0.5; // 境目までの長さ（大きい方が少し押す）
+      for (let i = 0; i < AMG_JN; i++) {
+        const c = AMG_JDIR[i][0] * nx + AMG_JDIR[i][1] * ny;
+        if (c > 0.08) lim[i] = Math.min(lim[i], s / (c * r));
+      }
+    }
+    // 平らな面どうしの角を丸める（とろっとした角に）
+    for (let pass = 0; pass < 3; pass++) for (let i = 0; i < AMG_JN; i++) {
+      const a = lim[(i + AMG_JN - 1) % AMG_JN], c = lim[(i + 1) % AMG_JN];
+      lim[i] = Math.min(lim[i], (a + c) / 2 + 0.035);
+    }
+    // つぶれた分をほかの向きへ（面積をそろえる）
+    let used = 0, free = 0;
+    for (let i = 0; i < AMG_JN; i++) { if (lim[i] < 1) used += lim[i] * lim[i]; else free++; }
+    const k = free ? Math.min(1.32, Math.sqrt(Math.max(1, (AMG_JN - used) / free))) : 1;
+    const still = b.speed < 0.8;
+    for (let i = 0; i < AMG_JN; i++) {
+      // 止まっているときは下がわが少し広がる（重さでとろんとたれる）
+      const sag = still ? AMG_JDIR[i][1] * 0.05 * Math.min(1, r / 40) : 0;
+      const target = Math.min(lim[i], k + sag);
+      w.rv[i] += ((target - w.rr[i]) * 150 - w.rv[i] * 6.5) * dt; // やわらかいばね（ゆっくりもどる＝ぷるんぷるん）
+      w.rr[i] += w.rv[i] * dt;
+      if (w.rr[i] > lim[i]) { w.rr[i] += (lim[i] - w.rr[i]) * 0.6; if (w.rv[i] > 0) w.rv[i] *= 0.3; } // めりこまない
+      w.rr[i] = Math.max(0.35, Math.min(1.6, w.rr[i]));
+    }
+    // となりの点となじませる（角ばらず、とろっとした丸み）
+    for (let pass = 0; pass < 2; pass++) for (let i = 0; i < AMG_JN; i++) {
+      const a = w.rr[(i + AMG_JN - 1) % AMG_JN], c = w.rr[(i + 1) % AMG_JN];
+      w.rr[i] = Math.min(lim[i], w.rr[i] + ((a + c) / 2 - w.rr[i]) * 0.18);
+    }
+  }
+}
+// ぶつかったとき、当たった向きのふちをへこませる（ぷるんとゆれて戻る）
+function amgJellyKick(b, nx, ny, power) {
+  if (!b.wob || !b.wob.rv) return;
+  for (let i = 0; i < AMG_JN; i++) {
+    const c = AMG_JDIR[i][0] * nx + AMG_JDIR[i][1] * ny;
+    b.wob.rv[i] += (c > 0 ? -c : -c * 0.5) * power; // 当たった側はへこみ、反対がわは少しふくらむ
+  }
+}
 function amgDrop() {
   if (!arcMergeSt || arcMergeSt.over || arcMergeSt.cool > 0) return;
   const b = amgMakeBall(arcMergeSt.cur, amgClampAim(arcMergeSt.cur), AMG_DROP_Y);
@@ -17118,7 +17184,12 @@ function amgOnCollide(ev) {
   ev.pairs.forEach(({ bodyA: a, bodyB: b }) => {
     // ぶつかった強さでぷるんとゆれる
     const rel = Math.hypot(a.velocity.x - b.velocity.x, a.velocity.y - b.velocity.y);
-    [a, b].forEach(o => { if (o.wob) { o.wob.sv += Math.min(3, rel * 0.6); o.wob.amp = Math.max(o.wob.amp, Math.min(0.12, rel * 0.03)); } });
+    [a, b].forEach(o => { if (o.wob) { o.wob.sv += Math.min(3, rel * 0.6); o.wob.amp = Math.max(o.wob.amp, Math.min(0.06, rel * 0.015)); } });
+    // 当たった向きのふちをへこませる（かべ・床なら、そのかべの向き）
+    const pw = Math.min(9, 1.5 + rel * 1.6);
+    const dxy = (o, p) => { const dx = p.x - o.position.x, dy = p.y - o.position.y, d = Math.hypot(dx, dy) || 1; return [dx / d, dy / d]; };
+    if (a.label === 'mon' && b.label === 'mon') { const [nx, ny] = dxy(a, b.position); amgJellyKick(a, nx, ny, pw); amgJellyKick(b, -nx, -ny, pw); }
+    else { const m = a.label === 'mon' ? a : b.label === 'mon' ? b : null; if (m) { const wx = m.position.x < AMG_LEFT + m.circleRadius * 1.5 ? -1 : m.position.x > AMG_RIGHT - m.circleRadius * 1.5 ? 1 : 0; amgJellyKick(m, wx, wx ? 0 : 1, pw); } }
     if (a.label !== 'mon' || b.label !== 'mon' || a.tier !== b.tier || a.merged || b.merged) return;
     a.merged = b.merged = true;
     const x = (a.position.x + b.position.x) / 2, y = (a.position.y + b.position.y) / 2, tier = a.tier;
@@ -17145,19 +17216,36 @@ function amgOnCollide(ev) {
 // スライムを描く：すきとおった水の体・つや・あわ・顔（体の向きは回さず、いつも上を向く）
 function amgSlime(g, t, x, y, w, look) {
   const r = t.r * (w ? 0.35 + 0.65 * arcElastic(w.born) : 1);
-  const sq = w ? w.sq : 0, amp = w ? w.amp : 0, ph = w ? w.ph : 0;
+  const jelly = w && w.rr;
+  const sq = w ? w.sq * (jelly ? 0.45 : 1) : 0, amp = w ? w.amp : 0, ph = w ? w.ph : 0;
   g.save();
   g.translate(x, y + r * sq * 0.9);
   g.scale(1 + sq, 1 - sq);
-  // 体の形（上が少しとがった水のしずく＋ぷるぷるのゆれ）
-  const N = 36;
-  g.beginPath();
-  for (let i = 0; i <= N; i++) {
-    const a = i / N * Math.PI * 2 - Math.PI / 2;
-    const tip = Math.pow(Math.max(0, -Math.sin(a)), 14) * 0.16;
-    const rr = r * (1 + tip + amp * Math.sin(a * 3 + ph) + amp * 0.5 * Math.sin(a * 5 - ph * 1.3));
-    const px = Math.cos(a) * rr, py = Math.sin(a) * rr * (Math.sin(a) > 0 ? 0.94 : 1);
-    i ? g.lineTo(px, py) : g.moveTo(px, py);
+  if (jelly) {
+    // ぷるんぷるん：ばねで動くふちの点（amgJellyStep）を、なめらかな線でつなぐ
+    const P = [];
+    for (let i = 0; i < AMG_JN; i++) {
+      const [ux, uy] = AMG_JDIR[i];
+      const tip = Math.pow(Math.max(0, -uy), 14) * 0.12 * Math.min(1, w.rr[i]);
+      const k = r * (w.rr[i] + tip + amp * Math.sin(i / AMG_JN * Math.PI * 6 + ph));
+      P.push([ux * k, uy * k]);
+    }
+    g.beginPath();
+    for (let i = 0; i <= AMG_JN; i++) {
+      const p0 = P[i % AMG_JN], p1 = P[(i + 1) % AMG_JN], mx = (p0[0] + p1[0]) / 2, my = (p0[1] + p1[1]) / 2;
+      i ? g.quadraticCurveTo(p0[0], p0[1], mx, my) : g.moveTo(mx, my);
+    }
+  } else {
+    // 体の形（上が少しとがった水のしずく＋ぷるぷるのゆれ）
+    const N = 36;
+    g.beginPath();
+    for (let i = 0; i <= N; i++) {
+      const a = i / N * Math.PI * 2 - Math.PI / 2;
+      const tip = Math.pow(Math.max(0, -Math.sin(a)), 14) * 0.16;
+      const rr = r * (1 + tip + amp * Math.sin(a * 3 + ph) + amp * 0.5 * Math.sin(a * 5 - ph * 1.3));
+      const px = Math.cos(a) * rr, py = Math.sin(a) * rr * (Math.sin(a) > 0 ? 0.94 : 1);
+      i ? g.lineTo(px, py) : g.moveTo(px, py);
+    }
   }
   g.closePath();
   const base = t.col;
@@ -18166,6 +18254,420 @@ function atmDraw(g) {
 window.__arcadeLoaded = true; // ここまで読み込めた印（extras の showLoadErrorsIfAny で確かめる）
 </script>
 
+<script>
+// ============================================================================
+// arcade3.html：ゲームセンターの「🍬 くっつきスライム」（arcade.html の仕組みを使う）
+// ・スライムは「ふちの点の輪」でできた、本当にやわらかい体（点のばね＋中の押す力＋丸にもどる弱い力）
+//   となりのスライムに押されると形が変わって、すき間なくぎゅうぎゅうにつまる
+// ・ふれたスライムどうしは少しくっつく（ねばねば）。同じ数字のスライムがふれると合体して次の数字に
+// ・グローバルの名前はすべて arcGoo〜（GAS の画面でほかの名前とぶつからないように長くする）
+// ============================================================================
+// ・遊び方：左右のかべの出口（1回ごとに入れかわる）から出てくるスライムを、引っぱってはなすと飛んでいく（引いた向きの反対へ、長く引くほど強く）
+//   スライムはかべ・天井・ほかのスライムにふれるとくっつき、とろとろとゆっくりたれる。上の方でも合体できる
+//   両がわの出口がスライムでふさがったら終わり
+ARCADE_GAMES.goo = { name: '🍬 くっつきスライム', short: 'くっつきスライム', col: ['#c026d3', '#701a75'], desc: '引っぱって飛ばす！ くっついたスライムを同じ数字どうしで合体', unit: '点', tag: '#くっつきスライム' };
+if (typeof BGM_SONGS !== 'undefined' && BGM_SONGS.arc_merge && !BGM_SONGS.arc_goo) BGM_SONGS.arc_goo = BGM_SONGS.arc_merge;
+
+const ARC_GOO_L = 22, ARC_GOO_R = 418, ARC_GOO_B = 596, ARC_GOO_T = 100;
+const ARC_GOO_LY = 360;            // 出口（左のかべ）の高さ
+const ARC_GOO_MAXV = 1150, ARC_GOO_PULLK = 7.5; // 飛ばす速さの上限・引いた長さ→速さ
+// 数字ごとの色（2 → 2048）。大きさは1段ごとに約1.22倍
+const ARC_GOO_LEVELS = [
+  { v: 2, col: '#f43f5e' }, { v: 4, col: '#fb923c' }, { v: 8, col: '#facc15' }, { v: 16, col: '#4ade80' },
+  { v: 32, col: '#22d3ee' }, { v: 64, col: '#3b82f6' }, { v: 128, col: '#a855f7' }, { v: 256, col: '#ec4899' },
+  { v: 512, col: '#14b8a6' }, { v: 1024, col: '#f97316' }, { v: 2048, col: '#fde047', gold: true }
+].map((t, i) => Object.assign({ r: Math.round(15 * Math.pow(1.22, i)) }, t));
+// カードでもらえるスライムの名前（ぷるぷるスライムと同じ並び）
+const ARC_GOO_CARDS = ['スライム', 'バブルスライム', '閃光のスライム9号', 'レッドスライム', 'ヒールスライム', '冥界のスライム7号', '古代のスライム5号', 'スライムナイト', 'メタルスライム', 'キングスライム', 'プラチナキング'];
+const ARC_GOO_SUB = 4, ARC_GOO_ITER = 3, ARC_GOO_GRAV = 1500, ARC_GOO_STICK = 3.5;
+// やわらかさ：ふちのばね・中から押す力・丸にもどる力（小さいほどとろとろ）
+let ARC_GOO_EDGE = 0.12, ARC_GOO_PRESS = 0.55, ARC_GOO_ROUND = 0.008;
+let arcGooSt = null;
+
+ARC_IMPL.goo = {
+  start() {
+    const cv = arcCanvas(440, 610);
+    arcGooSt = { bodies: [], cur: arcGooRand(), next: arcGooRand(), load: 0, side: -1, pull: null, drag: null, score: 0, over: false, overT: 0, combo: 0, comboT: 0, pops: [], drops: [], maxLvl: 0, merges: 0, t: 0, shots: 0 };
+    // 引っぱって飛ばす：おした所から指を動かした向きの反対へ飛ぶ（どこをおしてもよい）
+    const area = document.getElementById('arc-wrap') || cv;
+    const down = e => { if (!arcGooSt || arcGooSt.over) return; const p = arcPointer(cv, e); arcGooSt.drag = { sx: p.x, sy: p.y }; arcGooSt.pull = { x: 0, y: 0 }; };
+    const move = e => { const st = arcGooSt; if (!st || !st.drag) return; const p = arcPointer(cv, e); st.pull = { x: p.x - st.drag.sx, y: p.y - st.drag.sy }; };
+    const up = e => { const st = arcGooSt; if (!st || !st.drag) return; move(e); st.drag = null; arcGooLaunch(); };
+    cv.onpointerdown = down; cv.onpointermove = move; cv.onpointerup = up; cv.onpointercancel = () => { if (arcGooSt) { arcGooSt.drag = null; arcGooSt.pull = null; } };
+    area.onpointerdown = e => { if (e.target !== cv) down(e); }; area.onpointermove = move; area.onpointerup = up;
+    if (typeof arcNoScroll === 'function') { arcNoScroll(cv, true); if (area !== cv) arcNoScroll(area, true); }
+    document.getElementById('arc-controls').innerHTML = '<div style="font-size:12px; color:#f5d0fe; padding:6px;">👆 画面をおして、飛ばしたい向きの<b>反対</b>へ引っぱってはなす（長く引くほど強い）。同じ数字のスライムがくっつくと合体！</div>';
+    return Promise.resolve();
+  },
+  stop() { arcGooSt = null; },
+  reward(score) { return Math.min(1500, Math.floor(score / 6)); },
+  // 128まで作ったらそのスライムのカード、2048を作ったら宝珠
+  prize() {
+    if (!arcGooSt || arcGooSt.maxLvl < 6) return null;
+    return { cards: [ARC_GOO_CARDS[Math.min(ARC_GOO_CARDS.length - 1, arcGooSt.maxLvl)]], orbs: arcGooSt.maxLvl >= ARC_GOO_LEVELS.length - 1 ? 1 : 0 };
+  },
+  // キーボード：矢印で引く向きと長さを変えて、スペースで飛ばす
+  key(k, down, e) {
+    const st = arcGooSt;
+    if (!st || !down) return;
+    const p = st.pull || (st.pull = { x: -60, y: 40 });
+    if (k === 'ArrowLeft') p.x -= 10; else if (k === 'ArrowRight') p.x += 10;
+    else if (k === 'ArrowUp') p.y -= 10; else if (k === 'ArrowDown') p.y += 10;
+    else if (k === ' ' || k === 'Enter') { e.preventDefault(); arcGooLaunch(); }
+  },
+  update(dt) {
+    const st = arcGooSt;
+    if (!st || st.over) return;
+    st.t += dt;
+    st.load = Math.min(1, st.load + dt * 2.6); // 出口からにゅっと出てくる
+    st.comboT -= dt; if (st.comboT <= 0) st.combo = 0;
+    st.pops.forEach(pp => pp.t -= dt); st.pops = st.pops.filter(pp => pp.t > 0);
+    st.drops.forEach(d => { d.x += d.vx * dt; d.y += d.vy * dt; d.vy += 700 * dt; d.t -= dt; }); st.drops = st.drops.filter(d => d.t > 0);
+    arcGooWorldStep(1 / 60);
+    st.bodies.forEach(b => {
+      b.dropT += dt; b.born = Math.min(1, b.born + dt * 2.4);
+      b.blink -= dt; if (b.blink < -0.12) b.blink = 2 + Math.random() * 4;
+      b.A0 = b.Afull * (0.62 + 0.38 * arcElastic(b.born)); // 合体したてはぽよんとふくらむ
+    });
+    // 終わりの判定：出口のまわりがスライムでふさがったまま2.5秒
+    if (st.load >= 1 && !st.drag && arcGooBlocked() && !arcGooBlocked(-st.side)) { st.side = -st.side; st.load = 0; }
+    const blocked = arcGooBlocked() && arcGooBlocked(-st.side);
+    st.overT = blocked ? st.overT + dt : 0;
+    if (st.overT > 2.5) {
+      st.over = true;
+      finishArcadeGame('goo', st.score, `いちばん大きいスライム：${ARC_GOO_CARDS[Math.min(ARC_GOO_CARDS.length - 1, st.maxLvl)]}（${st.merges}回合体・${st.shots}回飛ばした）`);
+    }
+  },
+  draw(g) { arcGooDraw(g); }
+};
+function arcGooRand() { return Math.floor(Math.random() * Math.random() * 4.2); }
+function arcGooTop(b) { let m = 1e9; for (let i = 0; i < b.n; i++) m = Math.min(m, b.y[i]); return m; }
+// 出口で待っているスライムの中心
+// side：-1＝左のかべの出口、1＝右のかべの出口（1回ごとに左右が入れかわる。ふさがっている方は使わない）
+function arcGooSpot(lvl, side = arcGooSt ? arcGooSt.side : -1) { const r = ARC_GOO_LEVELS[lvl].r; return { x: side < 0 ? ARC_GOO_L + r + 6 : ARC_GOO_R - r - 6, y: ARC_GOO_LY }; }
+// 引っぱった長さ → 飛ばす速さ（引いた向きの反対）
+function arcGooVel(pull) {
+  let vx = -pull.x * ARC_GOO_PULLK, vy = -pull.y * ARC_GOO_PULLK;
+  const v = Math.hypot(vx, vy);
+  if (v > ARC_GOO_MAXV) { vx *= ARC_GOO_MAXV / v; vy *= ARC_GOO_MAXV / v; }
+  return { vx, vy };
+}
+// 出口のまわりにスライムがいるか（いると次が出られない）
+function arcGooBlocked(side = arcGooSt.side) {
+  const st = arcGooSt, s = arcGooSpot(st.cur, side), rr = ARC_GOO_LEVELS[st.cur].r + 2;
+  return st.bodies.some(b => {
+    if (!b.stuck || Math.hypot(b.cx - s.x, b.cy - s.y) > b.r * 1.7 + rr) return false;
+    return arcGooInside(b, s.x, s.y) || arcGooNearestEdge(b, s.x, s.y).d2 < rr * rr;
+  });
+}
+
+// やわらかい体を1つ作る（中心 cx, cy・数字の段 lvl）
+function arcGooMake(lvl, cx, cy, startScale = 1) {
+  const L = ARC_GOO_LEVELS[lvl], r = L.r;
+  const n = Math.max(18, Math.min(40, Math.round(r * 0.8)));
+  const b = { lvl, n, r, x: new Float32Array(n), y: new Float32Array(n), ox: new Float32Array(n), oy: new Float32Array(n),
+    qx: new Float32Array(n), qy: new Float32Array(n), Afull: Math.PI * r * r, A0: Math.PI * r * r, born: 1, dropT: 0,
+    blink: 2 + Math.random() * 3, edge: 2 * Math.PI * r / n, merged: false, cx, cy, minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  for (let i = 0; i < n; i++) {
+    const a = i / n * Math.PI * 2;
+    b.qx[i] = Math.cos(a) * r; b.qy[i] = Math.sin(a) * r;
+    b.x[i] = b.ox[i] = cx + b.qx[i] * startScale; b.y[i] = b.oy[i] = cy + b.qy[i] * startScale;
+  }
+  arcGooBox(b);
+  arcGooSt.bodies.push(b);
+  return b;
+}
+function arcGooBox(b) {
+  let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9, sx = 0, sy = 0;
+  for (let i = 0; i < b.n; i++) { const x = b.x[i], y = b.y[i]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; sx += x; sy += y; }
+  b.minX = x0; b.maxX = x1; b.minY = y0; b.maxY = y1; b.cx = sx / b.n; b.cy = sy / b.n;
+}
+function arcGooArea(b) {
+  let a = 0;
+  for (let i = 0, j = b.n - 1; i < b.n; j = i++) a += b.x[j] * b.y[i] - b.x[i] * b.y[j];
+  return a / 2;
+}
+// はなしたとき：引いた長さが短ければやめる。じゅうぶんなら出口のスライムを飛ばす
+function arcGooLaunch() {
+  const st = arcGooSt;
+  if (!st || st.over) return;
+  const pull = st.pull; st.pull = null;
+  if (!pull || st.load < 1 || Math.hypot(pull.x, pull.y) < 14) return;
+  const s = arcGooSpot(st.cur), v = arcGooVel(pull);
+  const b = arcGooMake(st.cur, s.x, s.y);
+  const h = 1 / 60 / ARC_GOO_SUB;
+  for (let i = 0; i < b.n; i++) { b.ox[i] = b.x[i] - v.vx * h; b.oy[i] = b.y[i] - v.vy * h; }
+  b.flyT = 0;
+  st.cur = st.next; st.next = arcGooRand(); st.load = 0; st.shots++;
+  if (!arcGooBlocked(-st.side)) st.side = -st.side; // 次は反対がわの出口から
+  arcSfx('step');
+}
+// 飛ぶ道すじの見本（かべで止める）。点の一覧を返す
+function arcGooFlightPath(pull, lvl) {
+  const s = arcGooSpot(lvl), v = arcGooVel(pull), r = ARC_GOO_LEVELS[lvl].r, pts = [];
+  let x = s.x, y = s.y, vx = v.vx, vy = v.vy;
+  for (let i = 0; i < 70; i++) {
+    const dt = 1 / 60;
+    vy += ARC_GOO_GRAV * dt; x += vx * dt; y += vy * dt;
+    if (x < ARC_GOO_L + r || x > ARC_GOO_R - r || y < ARC_GOO_T + r || y > ARC_GOO_B - r) { pts.push([Math.max(ARC_GOO_L + r, Math.min(ARC_GOO_R - r, x)), Math.max(ARC_GOO_T + r, Math.min(ARC_GOO_B - r, y)), true]); break; }
+    if (i % 3 === 0) pts.push([x, y, false]);
+  }
+  return pts;
+}
+
+// 1コマ分の動き（小さく4回に分けて計算する）
+function arcGooWorldStep(dt) {
+  const st = arcGooSt, h = dt / ARC_GOO_SUB, gh = ARC_GOO_GRAV * h * h;
+  const pairs = [];
+  for (let s = 0; s < ARC_GOO_SUB; s++) {
+    for (const b of st.bodies) {
+      // 飛んでいる間はふつうに落ちる。くっついたあとは、ねばねば（強いブレーキ・弱い重さ）でゆっくりたれる
+      const damp = b.stuck ? 0.955 : 0.999, gg = b.stuck ? gh * 0.18 : gh;
+      for (let i = 0; i < b.n; i++) {
+        const vx = (b.x[i] - b.ox[i]) * damp, vy = (b.y[i] - b.oy[i]) * damp;
+        b.ox[i] = b.x[i]; b.oy[i] = b.y[i];
+        b.x[i] += vx; b.y[i] += vy + gg;
+      }
+    }
+    for (let it = 0; it < ARC_GOO_ITER; it++) {
+      for (const b of st.bodies) arcGooShape(b);
+      arcGooCollide(s === ARC_GOO_SUB - 1 && it === ARC_GOO_ITER - 1 ? pairs : null);
+      for (const b of st.bodies) arcGooWalls(b);
+    }
+    for (const b of st.bodies) arcGooBox(b);
+  }
+  // 同じ数字どうしがくっついていたら合体
+  pairs.forEach(([a, b]) => { if (!a.merged && !b.merged && a.lvl === b.lvl) arcGooMerge(a, b); });
+}
+// 形を保つ：ふちのばね・中から押す力（大きさを保つ）・丸にもどる弱い力（とろとろなので弱め）
+function arcGooShape(b) {
+  const n = b.n, X = b.x, Y = b.y;
+  // ふちのばね
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n, dx = X[j] - X[i], dy = Y[j] - Y[i], d = Math.hypot(dx, dy) || 1e-6;
+    const k = (d - b.edge * Math.sqrt(b.A0 / b.Afull)) / d * ARC_GOO_EDGE;
+    X[i] += dx * k; Y[i] += dy * k; X[j] -= dx * k; Y[j] -= dy * k;
+  }
+  // 中から押す力（面積を A0 に近づける）
+  let A = 0, P = 0;
+  for (let i = 0, j = n - 1; i < n; j = i++) { A += X[j] * Y[i] - X[i] * Y[j]; P += Math.hypot(X[i] - X[j], Y[i] - Y[j]); }
+  A /= 2;
+  const push = (b.A0 - A) / (P || 1) * ARC_GOO_PRESS;
+  for (let i = 0; i < n; i++) {
+    const p = (i + n - 1) % n, q = (i + 1) % n;
+    let nx = Y[q] - Y[p], ny = -(X[q] - X[p]); const l = Math.hypot(nx, ny) || 1;
+    X[i] += nx / l * push; Y[i] += ny / l * push;
+  }
+  // 丸にもどる弱い力（いちばん合う回転を求めて、その向きの丸へ少し引く）
+  let cx = 0, cy = 0; for (let i = 0; i < n; i++) { cx += X[i]; cy += Y[i]; } cx /= n; cy /= n;
+  let sc = 0, ss = 0; for (let i = 0; i < n; i++) { const px = X[i] - cx, py = Y[i] - cy; sc += px * b.qx[i] + py * b.qy[i]; ss += py * b.qx[i] - px * b.qy[i]; }
+  const ang = Math.atan2(ss, sc), co = Math.cos(ang), si = Math.sin(ang), sz = Math.sqrt(b.A0 / b.Afull), k = ARC_GOO_ROUND;
+  for (let i = 0; i < n; i++) {
+    const tx = cx + (b.qx[i] * co - b.qy[i] * si) * sz, ty = cy + (b.qx[i] * si + b.qy[i] * co) * sz;
+    X[i] += (tx - X[i]) * k; Y[i] += (ty - Y[i]) * k;
+  }
+}
+// かべ・天井・床：ふれた点はぺたっと止まる（くっつく）
+function arcGooWalls(b) {
+  let hit = false;
+  for (let i = 0; i < b.n; i++) {
+    let c = false;
+    if (b.x[i] < ARC_GOO_L) { b.x[i] = ARC_GOO_L; c = true; }
+    else if (b.x[i] > ARC_GOO_R) { b.x[i] = ARC_GOO_R; c = true; }
+    if (b.y[i] > ARC_GOO_B) { b.y[i] = ARC_GOO_B; c = true; }
+    else if (b.y[i] < ARC_GOO_T) { b.y[i] = ARC_GOO_T; c = true; }
+    if (c) { b.ox[i] = b.x[i] - (b.x[i] - b.ox[i]) * 0.12; b.oy[i] = b.y[i] - (b.y[i] - b.oy[i]) * 0.12; hit = true; }
+  }
+  if (hit) arcGooStick(b);
+}
+// くっついた：ぺちゃっと音（1回だけ）
+function arcGooStick(b) { if (b.stuck) return; b.stuck = true; arcSfx('step'); }
+// 点が多角形の中にあるか
+function arcGooInside(b, px, py) {
+  let inside = false;
+  for (let i = 0, j = b.n - 1; i < b.n; j = i++) {
+    const yi = b.y[i], yj = b.y[j];
+    if ((yi > py) !== (yj > py) && px < (b.x[j] - b.x[i]) * (py - yi) / (yj - yi) + b.x[i]) inside = !inside;
+  }
+  return inside;
+}
+// いちばん近いふち（辺）と、その上の点
+function arcGooNearestEdge(b, px, py) {
+  let best = 1e18, bi = 0, bt = 0, bx = 0, by = 0;
+  for (let i = 0; i < b.n; i++) {
+    const j = (i + 1) % b.n, ax = b.x[i], ay = b.y[i], ex = b.x[j] - ax, ey = b.y[j] - ay;
+    const l2 = ex * ex + ey * ey || 1e-6;
+    let t = ((px - ax) * ex + (py - ay) * ey) / l2; t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const qx = ax + ex * t, qy = ay + ey * t, d = (px - qx) * (px - qx) + (py - qy) * (py - qy);
+    if (d < best) { best = d; bi = i; bt = t; bx = qx; by = qy; }
+  }
+  return { d2: best, i: bi, t: bt, x: bx, y: by };
+}
+// スライムどうし：めりこんだ点を外へ出す（相手のふちも同じだけ押し返す）。近くの点は少し引き寄せる（くっつく）
+function arcGooCollide(pairsOut) {
+  const B = arcGooSt.bodies, S = ARC_GOO_STICK;
+  for (let a = 0; a < B.length; a++) for (let c = a + 1; c < B.length; c++) {
+    const A = B[a], C = B[c];
+    if (A.maxX + S < C.minX || C.maxX + S < A.minX || A.maxY + S < C.minY || C.maxY + S < A.minY) continue;
+    let touch = 0;
+    for (const [P, Q] of [[A, C], [C, A]]) {
+      for (let i = 0; i < P.n; i++) {
+        const px = P.x[i], py = P.y[i];
+        if (px < Q.minX - S || px > Q.maxX + S || py < Q.minY - S || py > Q.maxY + S) continue;
+        const inside = arcGooInside(Q, px, py);
+        const e = arcGooNearestEdge(Q, px, py);
+        if (!inside && e.d2 > S * S) continue;
+        touch++;
+        // 外へ出す量（中なら全部、外の近くならくっつく分だけ少し引き寄せる）
+        const f = inside ? 0.5 : 0.1;
+        const dx = (e.x - px) * f, dy = (e.y - py) * f;
+        P.x[i] += dx; P.y[i] += dy;
+        const j = (e.i + 1) % Q.n;
+        Q.x[e.i] -= dx * (1 - e.t); Q.y[e.i] -= dy * (1 - e.t);
+        Q.x[j] -= dx * e.t; Q.y[j] -= dy * e.t;
+        if (inside) { // ぶつかった向きの速さを少し消す（とろっと受け止める）
+          P.ox[i] += (P.x[i] - P.ox[i]) * 0.15; P.oy[i] += (P.y[i] - P.oy[i]) * 0.15;
+        }
+      }
+    }
+    if (touch) { arcGooStick(A); arcGooStick(C); }
+    if (pairsOut && touch >= 2 && A.lvl === C.lvl) pairsOut.push([A, C]);
+  }
+}
+// 合体：2つのスライムを消して、重さの真ん中に次の数字のスライムを作る
+function arcGooMerge(a, b) {
+  const st = arcGooSt;
+  a.merged = b.merged = true;
+  const Aa = Math.abs(arcGooArea(a)), Ab = Math.abs(arcGooArea(b));
+  const x = (a.cx * Aa + b.cx * Ab) / (Aa + Ab), y = (a.cy * Aa + b.cy * Ab) / (Aa + Ab);
+  st.bodies = st.bodies.filter(o => o !== a && o !== b);
+  st.combo++; st.comboT = 1.2; st.merges++;
+  const nl = a.lvl + 1, col = ARC_GOO_LEVELS[a.lvl].col;
+  for (let i = 0; i < 14; i++) { const an = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 180; st.drops.push({ x, y, vx: Math.cos(an) * sp, vy: Math.sin(an) * sp - 120, t: 0.7, r: 3 + Math.random() * 4, col }); }
+  let gain;
+  if (nl >= ARC_GOO_LEVELS.length) { gain = 4096; arcSfx('jackpot'); } // 2048どうしは消えて大きな点
+  else {
+    const nr = ARC_GOO_LEVELS[nl].r * 0.6;
+    const nb = arcGooMake(nl, Math.max(ARC_GOO_L + nr, Math.min(ARC_GOO_R - nr, x)), Math.max(ARC_GOO_T + nr, Math.min(y, ARC_GOO_B - nr)), 0.75);
+    nb.born = 0; nb.dropT = 2; nb.stuck = true;
+    gain = ARC_GOO_LEVELS[nl].v; st.maxLvl = Math.max(st.maxLvl, nl);
+    arcSfx(nl >= 8 ? 'fanfare' : 'eat');
+  }
+  gain = Math.round(gain * (1 + (st.combo - 1) * 0.25));
+  st.score += gain;
+  st.pops = st.pops.filter(pp => pp.t < 0.6);
+  st.pops.push({ x, y, t: 0.9, txt: `+${gain}${st.combo > 1 ? ` ${st.combo}連鎖` : ''}` });
+}
+
+// ── 描く ──
+function arcGooPath(g, b) {
+  const n = b.n;
+  g.beginPath();
+  for (let i = 0; i <= n; i++) {
+    const p0 = i % n, p1 = (i + 1) % n, mx = (b.x[p0] + b.x[p1]) / 2, my = (b.y[p0] + b.y[p1]) / 2;
+    i ? g.quadraticCurveTo(b.x[p0], b.y[p0], mx, my) : g.moveTo(mx, my);
+  }
+  g.closePath();
+}
+function arcGooBody(g, b) {
+  const L = ARC_GOO_LEVELS[b.lvl], w = b.maxX - b.minX, h = b.maxY - b.minY, r = Math.max(w, h) / 2;
+  arcGooPath(g, b);
+  const gr = g.createRadialGradient(b.minX + w * 0.32, b.minY + h * 0.28, r * 0.08, b.cx, b.cy, r * 1.15);
+  gr.addColorStop(0, mv2ShadeSafe(L.col, 0.65)); gr.addColorStop(0.45, L.col); gr.addColorStop(1, mv2ShadeSafe(L.col, -0.4));
+  g.globalAlpha = 0.95; g.fillStyle = gr; g.fill(); g.globalAlpha = 1;
+  if (L.gold) { g.globalAlpha = 0.3 + 0.15 * Math.sin(performance.now() / 260); g.fillStyle = '#fff7ae'; g.fill(); g.globalAlpha = 1; }
+  g.lineWidth = Math.max(2, r * 0.06); g.strokeStyle = mv2ShadeSafe(L.col, -0.55); g.lineJoin = 'round'; g.stroke();
+  // 中の影とつや（体の形の中だけ）
+  g.save(); g.clip();
+  g.fillStyle = 'rgba(0,0,0,0.12)'; g.beginPath(); g.ellipse(b.cx, b.maxY, w * 0.55, h * 0.3, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = 'rgba(255,255,255,0.32)';
+  [[0.28, 0.3, 0.06], [0.2, 0.05, 0.035]].forEach(([bx, by, br]) => { g.beginPath(); g.arc(b.cx + bx * w, b.cy + by * h, br * r * 2, 0, Math.PI * 2); g.fill(); });
+  g.restore();
+  g.fillStyle = 'rgba(255,255,255,0.7)'; g.beginPath(); g.ellipse(b.minX + w * 0.3, b.minY + h * 0.22, w * 0.13, h * 0.06, -0.6, 0, Math.PI * 2); g.fill();
+  // 顔（目と口。数字は書かない＝色と大きさで見分ける）
+  const fr = Math.min(w, h) / 2, ey = b.cy - fr * 0.08, ex = fr * 0.3, er = Math.max(1.8, fr * 0.13);
+  g.fillStyle = '#1e1b2e';
+  [-1, 1].forEach(s => {
+    if (b.blink < 0) { g.fillRect(b.cx + s * ex - er, ey, er * 2, Math.max(1, er * 0.4)); return; }
+    g.beginPath(); g.ellipse(b.cx + s * ex, ey, er * 0.85, er * 1.25, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#fff'; g.beginPath(); g.arc(b.cx + s * ex - er * 0.25, ey - er * 0.45, er * 0.38, 0, Math.PI * 2); g.fill(); g.fillStyle = '#1e1b2e';
+  });
+  g.fillStyle = 'rgba(244,114,182,0.4)';
+  [-1, 1].forEach(s => { g.beginPath(); g.ellipse(b.cx + s * fr * 0.5, ey + fr * 0.26, fr * 0.12, fr * 0.065, 0, 0, Math.PI * 2); g.fill(); });
+  g.strokeStyle = '#1e1b2e'; g.lineWidth = Math.max(1.2, fr * 0.05); g.lineCap = 'round';
+  g.beginPath(); g.moveTo(b.cx - fr * 0.12, ey + fr * 0.24); g.quadraticCurveTo(b.cx, ey + fr * 0.38, b.cx + fr * 0.12, ey + fr * 0.24); g.stroke();
+  // いちばん上の2つは王冠（数字のかわりの目印）
+  if (b.lvl >= ARC_GOO_LEVELS.length - 2) {
+    const cw = fr * 0.6, cy = b.minY + fr * 0.12;
+    g.fillStyle = '#facc15'; g.strokeStyle = '#92400e'; g.lineWidth = Math.max(1.5, fr * 0.035);
+    g.beginPath(); g.moveTo(b.cx - cw / 2, cy + fr * 0.2); g.lineTo(b.cx - cw / 2, cy - fr * 0.05); g.lineTo(b.cx - cw / 4, cy + fr * 0.07); g.lineTo(b.cx, cy - fr * 0.14); g.lineTo(b.cx + cw / 4, cy + fr * 0.07); g.lineTo(b.cx + cw / 2, cy - fr * 0.05); g.lineTo(b.cx + cw / 2, cy + fr * 0.2); g.closePath(); g.fill(); g.stroke();
+  }
+}
+function arcGooPreview(g, lvl, x, y, rMax) {
+  const L = ARC_GOO_LEVELS[lvl], r = Math.min(rMax || 1e9, L.r);
+  const fake = { lvl, n: 24, x: new Float32Array(24), y: new Float32Array(24), blink: 1 };
+  const wob = arcGooSt ? Math.sin(arcGooSt.t * 4) * 0.04 : 0;
+  for (let i = 0; i < 24; i++) { const a = i / 24 * Math.PI * 2; fake.x[i] = x + Math.cos(a) * r * (1 + wob); fake.y[i] = y + Math.sin(a) * r * (1 - wob); }
+  arcGooBox(fake);
+  arcGooBody(g, fake);
+}
+function arcGooDraw(g) {
+  const cv = g.canvas, st = arcGooSt;
+  const bg = g.createLinearGradient(0, 0, 0, cv.height); bg.addColorStop(0, '#2e1065'); bg.addColorStop(1, '#0f0a1f');
+  g.fillStyle = bg; g.fillRect(0, 0, cv.width, cv.height);
+  if (!st) return;
+  // 入れ物（四方がかべ。左のかべに出口）
+  g.fillStyle = 'rgba(15,10,31,0.75)'; g.fillRect(ARC_GOO_L, ARC_GOO_T, ARC_GOO_R - ARC_GOO_L, ARC_GOO_B - ARC_GOO_T);
+  g.strokeStyle = '#e879f9'; g.lineWidth = 5; g.lineJoin = 'round';
+  g.beginPath(); g.rect(ARC_GOO_L - 3, ARC_GOO_T - 3, ARC_GOO_R - ARC_GOO_L + 6, ARC_GOO_B - ARC_GOO_T + 6); g.stroke();
+  const ps = arcGooSpot(st.cur), pr = ARC_GOO_LEVELS[st.cur].r;
+  // 出口（ふさがりそうなら赤く光る）
+  const warn = st.overT > 0 ? 0.5 + Math.sin(performance.now() / 80) * 0.4 : 0;
+    [-1, 1].forEach(sd => {
+    const on = sd === st.side;
+    g.fillStyle = on ? (warn ? `rgba(248,113,113,${warn})` : '#a21caf') : '#4a044e';
+    arcRoundRect(g, sd < 0 ? 0 : ARC_GOO_R - 4, ARC_GOO_LY - pr - 8, ARC_GOO_L + 4, (pr + 8) * 2, 6); g.fill();
+    g.strokeStyle = on ? '#f0abfc' : '#86198f'; g.lineWidth = 2; g.stroke();
+  });
+  // 上の表示
+  arcText(g, `${st.score.toLocaleString()}点`, 14, 24, 22, '#fff', 'left');
+  arcRoundRect(g, 366, 6, 66, 74, 10); g.fillStyle = 'rgba(15,10,31,0.85)'; g.fill(); g.strokeStyle = '#f0abfc'; g.lineWidth = 1.5; g.stroke();
+  arcText(g, 'NEXT', 399, 17, 11, '#f0abfc');
+  arcGooPreview(g, st.next, 399, 52, 21);
+  // 大きさの順番（色と大きさで見分ける）
+  const n = ARC_GOO_LEVELS.length, w = 340 / n;
+  ARC_GOO_LEVELS.forEach((L, i) => { g.globalAlpha = i <= st.maxLvl ? 1 : 0.3; arcGooPreview(g, i, 10 + w * (i + 0.5), 66, Math.min(w * 0.45, 6 + i * 0.9)); });
+  g.globalAlpha = 1;
+  st.bodies.slice().sort((a, b) => a.lvl - b.lvl).forEach(b => arcGooBody(g, b));
+  // 出口で待っているスライム・引っぱるゴム・飛ぶ道すじ
+  if (!st.over) {
+    const e = arcElastic(st.load);
+    const pull = st.pull && Math.hypot(st.pull.x, st.pull.y) >= 4 ? st.pull : null;
+    let sx = ps.x + st.side * (1 - Math.min(1, st.load)) * (pr * 2 + 6), sy = ps.y;
+    if (pull && st.load >= 1) {
+      const len = Math.hypot(pull.x, pull.y), k = Math.min(1, 46 / len) * 0.45;
+      sx += pull.x * k; sy += pull.y * k;
+      // 道すじ（点々）
+      arcGooFlightPath(pull, st.cur).forEach(([x, y, end], i) => {
+        g.globalAlpha = end ? 0.8 : Math.max(0.15, 0.8 - i * 0.04); g.fillStyle = end ? '#fde047' : '#fff';
+        g.beginPath(); g.arc(x, y, end ? 5 : 3, 0, Math.PI * 2); g.fill();
+      });
+      g.globalAlpha = 1;
+      // ゴム
+      g.strokeStyle = '#f0abfc'; g.lineWidth = 3;
+      const wx = st.side < 0 ? ARC_GOO_L : ARC_GOO_R;
+      g.beginPath(); g.moveTo(wx, ps.y - pr * 0.7); g.lineTo(sx, sy); g.lineTo(wx, ps.y + pr * 0.7); g.stroke();
+    }
+    g.save(); g.beginPath(); g.rect(ARC_GOO_L, 0, ARC_GOO_R - ARC_GOO_L, 610); g.clip(); // 出口の中は見えない
+    arcGooPreview(g, st.cur, sx, sy, pr * (0.6 + 0.4 * e));
+    g.restore();
+  }
+  st.drops.forEach(d => { g.globalAlpha = Math.min(1, d.t * 2); g.fillStyle = d.col; g.beginPath(); g.arc(d.x, d.y, d.r, 0, Math.PI * 2); g.fill(); });
+  g.globalAlpha = 1;
+  st.pops.forEach(pp => { g.globalAlpha = Math.min(1, pp.t * 2); arcText(g, pp.txt, pp.x, pp.y - 20 - (0.9 - pp.t) * 40, 18, '#fde047'); g.globalAlpha = 1; });
+}
+</script>
+
 <script>window.SERVER_BOOT = (function () {
   var q = new URLSearchParams(location.search);
   var qi = q.get('id') || '', qk = (q.get('key') || '').trim();
@@ -18856,7 +19358,7 @@ setTimeout(checkCloudOnStartup, 300);
 // ############################################################################
 
 // ★ デプロイするたびに、ここの番号と日付を書き換えてください
-const GAME_VERSION = 'v2.32.3';
+const GAME_VERSION = 'v2.33.0';
 const GAME_BUILD_DATE = '2026-11-05';
 
 // ============================================================================
@@ -19663,9 +20165,10 @@ const RANK_TABS = {
   a_run: { label: '🏃 ラン', title: 'ゲームセンター：ダンジョンラン', fmt: v => `${v.toLocaleString()} 点` },
   a_archer: { label: '🎯 弓矢', title: 'ゲームセンター：まものアーチェリー', fmt: v => `${v.toLocaleString()} 点` },
   a_snake: { label: '🐍 れんけつ', title: 'ゲームセンター：なかまれんけつ', fmt: v => `${v.toLocaleString()} 体` },
-  a_timer: { label: '⏱️ 10秒', title: 'ゲームセンター：ぴったり10秒', fmt: v => `${v.toLocaleString()} 点` }
+  a_timer: { label: '⏱️ 10秒', title: 'ゲームセンター：ぴったり10秒', fmt: v => `${v.toLocaleString()} 点` },
+  a_goo: { label: '🍬 くっつき', title: 'ゲームセンター：くっつきスライム', fmt: v => `${v.toLocaleString()} 点` }
 };
-const ARCADE_RANK_KEYS = ['bomb', 'merge', 'tower', 'slide', 'run', 'archer', 'snake', 'timer']; // コード.js の RANK_CATEGORIES（a_〜）と同じ
+const ARCADE_RANK_KEYS = ['bomb', 'merge', 'tower', 'slide', 'run', 'archer', 'snake', 'timer', 'goo']; // コード.js の RANK_CATEGORIES（a_〜）と同じ
 function submitPvpWins() { submitRankings(false); }
 function playerName() { const d = extrasData(); if (!d.name) { d.name = 'ぼうけんしゃ' + (100 + Math.floor(Math.random() * 900)); } return d.name; }
 function rankingAvailable() { return typeof hasCloudRunner === 'function' && hasCloudRunner(); }
@@ -21048,7 +21551,7 @@ async function bot_arcadeVisit(token) {
 
 // 1回分を最後まで遊ぶ（結果の画面が出たら戻る）
 async function bot_playArcadeGame(k, token, maxMs = 15 * 60 * 1000) {
-  const play = { bomb: bot_arcBomb, merge: bot_arcMerge, tower: bot_arcTower, slide: bot_arcSlide, run: bot_arcRun, archer: bot_arcArcher, snake: bot_arcSnake, timer: bot_arcTimer }[k];
+  const play = { bomb: bot_arcBomb, merge: bot_arcMerge, tower: bot_arcTower, slide: bot_arcSlide, run: bot_arcRun, archer: bot_arcArcher, snake: bot_arcSnake, timer: bot_arcTimer, goo: bot_arcGoo }[k];
   if (!play) { await bot_wait(1000, 1500, token); return; }
   // 始まってすぐ動くゲーム（ボム・ラン・れんけつ）は待たずに操作する。ほかは少し様子を見る
   if (!BOT_ARC_REALTIME.includes(k)) await bot_wait(700, 1300, token);
@@ -21099,6 +21602,38 @@ async function bot_arcMerge(token) {
   await bot_wait(80, 260, token);
   amgDrop();
   await bot_wait(450, 900, token);
+}
+
+// 🍬 くっつきスライム：同じ色のスライムに当たる引き方を探す（なければ出口から遠い右の方へ）。指を少しずつ引いてはなす
+async function bot_arcGoo(token) {
+  const st = typeof arcGooSt !== 'undefined' ? arcGooSt : null;
+  if (!st || st.over) { await bot_wait(300, 500, token); return; }
+  if (st.load < 1) { await bot_wait(80, 160, token); return; }
+  const targets = st.bodies.filter(b => b.stuck && b.lvl === st.cur);
+  const spot = arcGooSpot(st.cur);
+  let best = null, bestScore = -1e9;
+  for (let a = -1.35; a <= 0.95; a += 0.07) for (let p = 30; p <= 160; p += 10) {
+    const pull = { x: -Math.cos(a) * p, y: -Math.sin(a) * p };
+    const path = arcGooFlightPath(pull, st.cur), end = path[path.length - 1];
+    if (!end) continue;
+    let sc = 0;
+    if (targets.length) {
+      let dmin = 1e9;
+      path.forEach(([x, y]) => targets.forEach(t => { dmin = Math.min(dmin, Math.hypot(x - t.cx, y - t.cy) - t.r); }));
+      sc = -dmin * 2;
+    } else sc = Math.hypot(end[0] - spot.x, end[1] - spot.y) * 0.5; // 出口から遠くへ
+    // 出口の近くに止まりそうな道すじはさける
+    if (Math.hypot(end[0] - spot.x, end[1] - spot.y) < 90) sc -= 400;
+    sc += bot_rand(0, 25);
+    if (sc > bestScore) { bestScore = sc; best = pull; }
+  }
+  if (!best) best = { x: -90, y: 30 };
+  // 指を少しずつ引く（狙いを定めるように）
+  const steps = 8 + Math.floor(Math.random() * 6);
+  for (let i = 1; i <= steps; i++) { st.pull = { x: best.x * i / steps, y: best.y * i / steps }; await bot_wait(30, 60, token); }
+  await bot_wait(200, 500, token);
+  if (arcGooSt === st && !st.over) { st.pull = best; arcGooLaunch(); }
+  await bot_wait(600, 1100, token);
 }
 
 // 🗿 ゴーレム：上のモンスターの真上に来た瞬間に落とす（たまに少しずれる）
