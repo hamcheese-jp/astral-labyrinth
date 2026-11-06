@@ -678,6 +678,17 @@ const CONSUMABLES_DB = ITEM_NAMES.map((n, idx) => {
 
 const ITEMS_DB = [...CONSUMABLES_DB, ...ARROWS_DB, ...STAFFS_DB];
 
+// ガチャ・カジノの交換所・大戦争のくり返しでもらった物は、売ってもあまりお金にならない
+// （以前はダンジョンで拾った物と同じ売値で、500Gのガチャを引いて売ると平均3,400Gになり、お金がいくらでも増やせた）
+const PRIZE_SELL_BY_RANK = [0, 80, 160, 400, 1000, 2500];
+// rate：カジノの交換所は0.1（メダルは賭けた額でもらえ、負ける分はわずかなので、売値もごく少なく）
+function setPrizeSellPrice(it, rate = 1) {
+  if (!it) return it;
+  it.price = Math.max(10, Math.round(((PRIZE_SELL_BY_RANK[Math.min(5, Math.max(1, it.rank || 1))] || 80) + (it.plus || 0) * 50) * rate));
+  it.prizeItem = true;
+  return it;
+}
+
 const MONSTER_Specs = [
   { n:'スライム', type:'slime', col:'#38bdf8', elem:'water', skill:'アクア跳撃' },
   { n:'レッドスライム', type:'slime', col:'#fb923c', elem:'fire', skill:'ファイア跳撃' },
@@ -9739,7 +9750,7 @@ function dungeonRefineItem(idx, cost) {
   it.val += 3;
   let bName = it.baseName || it.n.replace(/\+\d+$/, '');
   it.n = `${bName}+${it.plus}`;
-  it.price = (it.price || 1500) + 700;
+  it.price = (it.price || 1500) + Math.floor(cost * 0.45); // 払った額より売値が上がらないように（以前は+700で、1回目の500Gの強化で得をした）
 
   sfx.lv();
   addPop(p.x, p.y, `⚒️${it.n} (+3)!`, '#fb923c', 14, true);
@@ -10482,7 +10493,7 @@ function gachaMakeEquip(rank) {
   let eqPool = [...WEAPONS, ...ARMORS].filter(x => x.rank === rank);
   if (eqPool.length === 0) eqPool = [...WEAPONS, ...ARMORS].filter(x => x.rank === 1);
   const tmpl = eqPool[Math.floor(Math.random() * eqPool.length)];
-  const eqItem = makeEquip(tmpl, tmpl.t === 'wep', rank >= 3 ? 1 : 0);
+  const eqItem = setPrizeSellPrice(makeEquip(tmpl, tmpl.t === 'wep', rank >= 3 ? 1 : 0));
   warehouse.push(eqItem);
   return { kind: 'equip', item: eqItem, name: `⚔️${eqItem.n}`, rank: eqItem.rank, desc: `倉庫へ送付(${eqItem.t === 'wep' ? '攻' : '防'}:${eqItem.val})`, col: RANK_COLORS[eqItem.rank] };
 }
@@ -10492,6 +10503,7 @@ function gachaMakeSeed(rank) {
   const seedTmpl = seedPool.length > 0 ? seedPool[Math.floor(Math.random() * seedPool.length)] : CONSUMABLES_DB[4];
   const seedItem = JSON.parse(JSON.stringify(seedTmpl));
   seedItem.rank = rank; seedItem.stars = '★'.repeat(rank); seedItem.color = RANK_COLORS[rank];
+  setPrizeSellPrice(seedItem);
   warehouse.push(seedItem);
   const gainHp = 4 * rank, gainStr = 1 * rank, gainDef = rank >= 3 ? 1 : 0;
   encyclopedia.seedBonus.mhp = (encyclopedia.seedBonus.mhp || 0) + gainHp;
@@ -10996,6 +11008,7 @@ function makeCpuRival() {
   const deck = Array.from({ length: Math.max(3, mine.length) }, () => { const m = pool[Math.floor(Math.random() * pool.length)]; return { n: m.n, lv: avgLv, plus: 0 }; });
   return { name: '🤖 練習相手', deck, power: deckPower(rivalSpecs(deck)), cpu: true };
 }
+const PVP_DAILY_FULL_WINS = 10; // 対戦の賞金500Gをもらえる1日の勝利数
 function pvpData() { if (!encyclopedia.pvp) encyclopedia.pvp = { wins: 0, losses: 0 }; return encyclopedia.pvp; }
 function openPvpMenu() {
   initAudio(); sfx.step();
@@ -11888,10 +11901,16 @@ function finishTdBattle(isWin) {
   if (tdState.pvp) { // 対戦の結果
     const pd = pvpData(), r = tdState.pvp;
     if (isWin) {
-      pd.wins++; bankGold += 500;
+      // 賞金：練習相手は100G。ほかの人のデッキは1日10勝まで500G、そのあとは100G（同じ相手にくり返し勝ってお金を増やしすぎないように）
+      const today = typeof jstDayKey === 'function' ? String(jstDayKey()) : new Date().toDateString();
+      if (pd.goldDay !== today) { pd.goldDay = today; pd.goldWins = 0; }
+      let prize = 100;
+      if (!r.cpu && (pd.goldWins || 0) < PVP_DAILY_FULL_WINS) { prize = 500; pd.goldWins = (pd.goldWins || 0) + 1; }
+      pd.wins++; bankGold += prize;
       sfx.fanfare(); saveMeta();
       if (typeof submitPvpWins === 'function') submitPvpWins();
-      alert(`🏆 対戦に勝利！ 【${r.name}】のデッキをやぶりました！\n\n・賞金: +500 G\n・対戦成績: ${pd.wins}勝 ${pd.losses}敗`);
+      const note = r.cpu ? '（練習相手）' : prize < 500 ? `（今日の${PVP_DAILY_FULL_WINS}勝をこえたので少なめ）` : `（今日あと${PVP_DAILY_FULL_WINS - pd.goldWins}回まで500G）`;
+      alert(`🏆 対戦に勝利！ 【${r.name}】のデッキをやぶりました！\n\n・賞金: +${prize} G ${note}\n・対戦成績: ${pd.wins}勝 ${pd.losses}敗`);
     } else {
       pd.losses++; sfx.over(); saveMeta();
       alert(`💀 対戦に負けました… 【${r.name}】のデッキは手ごわい！\n\n・対戦成績: ${pd.wins}勝 ${pd.losses}敗\nカードを強化したり、つながりボーナスが出るデッキにして再挑戦しよう！`);
@@ -11900,12 +11919,15 @@ function finishTdBattle(isWin) {
     return;
   }
   if (isWin) {
-    let rewardG = lg.rewardG;
+    // 前に勝ったステージのくり返しは、賞金が3割・戦利品は売ってもあまりお金にならない（ダンジョンの2回目以降の制覇と同じ考え）
+    const replay = lg.stageNum < getMaxUnlockedStage() || (Number(arenaStarsData()[lg.stageNum]) || 0) > 0;
+    let rewardG = replay ? Math.round(lg.rewardG * 0.3) : lg.rewardG;
     bankGold += rewardG;
     let prizePool = [...WEAPONS, ...ARMORS].filter(x => x.rank === lg.eqRank);
     if (prizePool.length === 0) prizePool = WEAPONS;
     let tmpl = prizePool[Math.floor(Math.random() * prizePool.length)];
     let prize = makeEquip(tmpl, tmpl.t === 'wep', Math.min(4, Math.floor(lg.stageNum / 18)));
+    if (replay) setPrizeSellPrice(prize);
     warehouse.push(prize);
 
     let maxSt = getMaxUnlockedStage();
@@ -11925,7 +11947,7 @@ function finishTdBattle(isWin) {
     let starMsg = `\n\n⭐ 評価：${arenaStarText(stars)}（城HP ${Math.round(hpRate * 100)}%・${secs}秒）`;
     if (stars > before) {
       sd[lg.stageNum] = stars;
-      if (before < 2 && stars >= 2) { const b = Math.round(rewardG * 0.5); bankGold += b; starMsg += `\n・はじめての★2ボーナス: +${b} G`; }
+      if (before < 2 && stars >= 2) { const b = Math.round(lg.rewardG * 0.5); bankGold += b; starMsg += `\n・はじめての★2ボーナス: +${b} G`; }
       if (before < 3 && stars >= 3) { const cn = arenaGiveRandomCard(Math.min(5, 1 + Math.floor(lg.stageNum / 25))); starMsg += `\n・はじめての★3ボーナス: 🃏【${cn}】のカード！`; }
     }
     // 集めた★の合計のごほうび
@@ -11950,7 +11972,7 @@ function finishTdBattle(isWin) {
     }
 
     sfx.fanfare(); saveMeta();
-    alert(`🏆✨ 【${lg.name}】攻略成功！！\n敵要塞を撃破しました！\n\n・賞金: +${rewardG} G\n・戦利品: 【${prize.n}】を倉庫へ獲得！${unlockMsg}${starMsg}`);
+    alert(`🏆✨ 【${lg.name}】攻略成功！！\n敵要塞を撃破しました！\n\n・賞金: +${rewardG} G${replay ? "（2回目以降は3割）" : ""}\n・戦利品: 【${prize.n}】を倉庫へ獲得！${unlockMsg}${starMsg}`);
   } else {
     sfx.over();
     alert(`💀 敗北… 王国城が陥落しました。\nカードを個別強化・限界突破・進化させるか、前のステージで資金や装備を集めて再挑戦しよう！`);
@@ -16033,7 +16055,7 @@ function checkCasinoAchievements() {
 function casinoGiveEquip(isWep, rank, plus) {
   const pool = (isWep ? WEAPONS : ARMORS).filter(x => x.rank === rank);
   const tmpl = pool[Math.floor(Math.random() * pool.length)];
-  const it = makeEquip(tmpl, isWep, plus);
+  const it = setPrizeSellPrice(makeEquip(tmpl, isWep, plus), 0.1); // メダルで交換した物は売ってもあまりお金にならない
   warehouse.push(it);
   return `${it.n}（${isWep ? '攻' : '防'}${it.val}）を倉庫に送りました`;
 }
@@ -16483,6 +16505,7 @@ function quitArcadeGame() {
   openArcadeLobby();
 }
 
+const ARCADE_DAILY_GOLD = 5000; // ゲームセンターのごほうびGの1日の上限
 // ゲームが終わったとき：記録・ごほうびのG・結果の画面
 function finishArcadeGame(k, score, detail) {
   arcState.paused = true;
@@ -16490,8 +16513,14 @@ function finishArcadeGame(k, score, detail) {
   const prev = d.best[k] || 0, isNew = score > prev;
   if (isNew) d.best[k] = score;
   d.plays[k] = (d.plays[k] || 0) + 1;
-  const reward = ARC_IMPL[k].reward(score);
-  if (reward > 0) { bankGold += reward; d.gold = (d.gold || 0) + reward; }
+  // ごほうびのGは1日（日本の日付）に合わせて5,000Gまで。こえた分は1割（くり返し遊んでお金を増やしすぎないように）
+  const fullReward = ARC_IMPL[k].reward(score);
+  const today = typeof jstDayKey === 'function' ? String(jstDayKey()) : new Date().toDateString();
+  if (d.goldDay !== today) { d.goldDay = today; d.goldToday = 0; }
+  const room = Math.max(0, ARCADE_DAILY_GOLD - (d.goldToday || 0));
+  const reward = Math.min(fullReward, room) + Math.floor(Math.max(0, fullReward - room) * 0.1);
+  const capped = reward < fullReward;
+  if (reward > 0) { bankGold += reward; d.gold = (d.gold || 0) + reward; d.goldToday = (d.goldToday || 0) + reward; }
   const prizes = arcGivePrizes(ARC_IMPL[k].prize ? ARC_IMPL[k].prize(score) : null);
   saveMeta();
   if (isNew && typeof submitRankings === 'function') setTimeout(() => submitRankings(false), 400); // 全国ランキング（extras）
@@ -16506,6 +16535,7 @@ function finishArcadeGame(k, score, detail) {
     <div style="font-size:13px; color:#e2e8f0;">${detail}</div>
     <div style="font-size:42px; font-weight:900; color:#fff; text-shadow:0 0 14px #a855f7;">${score.toLocaleString()}<span style="font-size:18px;">${gm.unit}</span></div>
     <div style="font-size:12px; color:#fde68a;">🏆 自己ベスト ${Math.max(prev, score).toLocaleString()}${gm.unit}${reward > 0 ? `　💰 +${reward.toLocaleString()} G` : ''}</div>
+    ${capped ? `<div style="font-size:10.5px; color:#fca5a5;">今日のごほうびGは上限（${ARCADE_DAILY_GOLD.toLocaleString()}G）をこえたので1割です。明日また元にもどります</div>` : ''}
     ${prizes.length ? `<div style="font-size:12px; color:#a7f3d0; text-align:center;">🎁 ${prizes.join('<br>🎁 ')}</div>` : ''}
     <button style="width:240px; height:46px; font-size:15px; background:linear-gradient(180deg,#e11d48,#9f1239); border-color:#fda4af;" onclick="openScoreShare()">📣 スコアをSNSに投稿</button>
     <div style="display:flex; gap:8px;">
@@ -18057,7 +18087,7 @@ ARC_IMPL.timer = {
     return Promise.resolve();
   },
   stop() { arcTimerSt = null; },
-  reward(score) { return Math.min(1500, Math.floor(score / 2)); },
+  reward(score) { return Math.min(500, Math.floor(score / 6)); }, // 1回30秒ほどで遊べるので少なめ（以前は最大1,500G）
   prize(score) { if (score < 2700) return null; return { cards: ['ゴースト'], orbs: score >= 2950 ? 1 : 0 }; },
   key(k, down, e) { if (down && (k === ' ' || k === 'Enter')) { e.preventDefault(); atmPress(); } },
   update(dt) {
@@ -18826,7 +18856,7 @@ setTimeout(checkCloudOnStartup, 300);
 // ############################################################################
 
 // ★ デプロイするたびに、ここの番号と日付を書き換えてください
-const GAME_VERSION = 'v2.32.2';
+const GAME_VERSION = 'v2.32.3';
 const GAME_BUILD_DATE = '2026-11-05';
 
 // ============================================================================
