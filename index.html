@@ -18295,9 +18295,13 @@ ARC_IMPL.goo = {
     const cv = arcCanvas(440, 610);
     arcGooSt = { bodies: [], next: arcGooRand(), refillT: 0, bubbles: [], specks: Array.from({ length: 36 }, () => ({ x: ARC_GOO_L + Math.random() * (ARC_GOO_R - ARC_GOO_L), y: ARC_GOO_LINE + Math.random() * (ARC_GOO_B - ARC_GOO_LINE), r: 0.6 + Math.random() * 1.2, a: 0.15 + Math.random() * 0.3, ph: Math.random() * 6 })), pull: null, drag: null, score: 0, over: false, overT: 0, combo: 0, comboT: 0, pops: [], drops: [], maxLvl: 0, merges: 0, t: 0, shots: 0 };
     // はじめのたな：4つを横に並べておく
+    arcGooSt.qn = 0;
+    let qx = ARC_GOO_CX;
     for (let i = 0; i < ARC_GOO_SHELF_N; i++) {
       const lvl = arcGooRand(), r = ARC_GOO_LEVELS[lvl].r;
-      const b = arcGooMake(lvl, ARC_GOO_CX + (i - 1.5) * 92, ARC_GOO_T + r + 2); b.shelf = true;
+      if (i) qx += r; if (qx + r > ARC_GOO_R) break;
+      const b = arcGooMake(lvl, qx, ARC_GOO_T + r + 2); b.shelf = true; b.qi = arcGooSt.qn++;
+      qx += r;
     }
     // 引っぱって飛ばす：おした所から指を動かした向きの反対へ飛ぶ（どこをおしてもよい）
     const area = document.getElementById('arc-wrap') || cv;
@@ -18359,7 +18363,7 @@ ARC_IMPL.goo = {
     st.refillT -= dt;
     if (st.refillT <= 0 && st.bodies.filter(b => b.shelf).length < ARC_GOO_SHELF_N && arcGooShelfFree(st.next)) {
       const r = ARC_GOO_LEVELS[st.next].r, b = arcGooMake(st.next, ARC_GOO_R - r - 2, ARC_GOO_T + r + 2, 0.5);
-      b.shelf = true; b.born = 0; st.next = arcGooRand(); st.refillT = 0.35;
+      b.shelf = true; b.qi = st.qn++; b.born = 0; st.next = arcGooRand(); st.refillT = 0.35;
       arcGooAddBubbles(b.cx, b.cy, 6, r * 0.6, 30);
     }
     // 終わりの判定：積もったスライム（たなでも飛んでいる最中でもない）が点線より上で、ほとんど止まったまま2.5秒
@@ -18386,15 +18390,22 @@ function arcGooRand() { return Math.floor(Math.random() * Math.random() * 5.4); 
 function arcGooTop(b) { let m = 1e9; for (let i = 0; i < b.n; i++) m = Math.min(m, b.y[i]); return m; }
 // 今打つスライム：たなの中でいちばん真ん中に近いもの（出てきたばかりのものは除く）
 function arcGooCurrent() {
-  const st = arcGooSt; if (!st) return null;
-  let best = null, bd = 1e9;
-  st.bodies.forEach(b => { if (!b.shelf || b.merged || b.born < 0.9) return; const d = Math.abs(b.cx - ARC_GOO_CX); if (d < bd) { bd = d; best = b; } });
-  return best;
+  const q = arcGooQueue(), b = q[0];
+  return b && b.born >= 0.9 && Math.abs(b.cx - ARC_GOO_CX) < 26 ? b : null;
+}
+// たなの列（入った順）。先頭は真ん中、そのあとは右へすき間なく並ぶ場所 b.tx を決める
+function arcGooQueue() {
+  const st = arcGooSt; if (!st) return [];
+  const q = st.bodies.filter(b => b.shelf && !b.merged).sort((a, b) => a.qi - b.qi);
+  let x = ARC_GOO_CX;
+  q.forEach((b, i) => { const r = b.r * (0.62 + 0.38 * Math.min(1, b.born)); if (i) x += r; b.tx = x; x += r; });
+  return q;
 }
 // たなの右のはしに、新しいスライムが入る場所があるか
 function arcGooShelfFree(lvl) {
-  const r = ARC_GOO_LEVELS[lvl].r, x = ARC_GOO_R - r - 2, y = ARC_GOO_T + r + 2;
-  return !arcGooSt.bodies.some(b => b.maxX > x - r - 4 && b.minY < y + r);
+  const r = ARC_GOO_LEVELS[lvl].r, q = arcGooQueue(), last = q[q.length - 1];
+  const end = last ? Math.max(last.tx + last.r, last.maxX) : ARC_GOO_CX - r;
+  return end + r * 2 <= ARC_GOO_R + 2 && !arcGooSt.bodies.some(b => !b.shelf && b.maxX > ARC_GOO_R - r * 2 - 4 && b.minY < ARC_GOO_T + r * 2);
 }
 // 引っぱった長さ → 飛ばす速さ（引いた向きの反対）
 function arcGooVel(pull) {
@@ -18472,6 +18483,7 @@ function arcGooFlightPath(pull, lvl, from) {
 function arcGooWorldStep(dt) {
   const st = arcGooSt, h = dt / ARC_GOO_SUB, gh = ARC_GOO_GRAV * h * h;
   const pairs = [];
+  arcGooQueue(); // たなの並ぶ場所を決めなおす
   for (let s = 0; s < ARC_GOO_SUB; s++) {
     for (const b of st.bodies) {
       // 水の中：飛んでいる間は水のブレーキで遅くなり、ふわっと沈む。くっついたあとは、ねばねば（強いブレーキ・弱い重さ）でゆっくりたれる
@@ -18480,7 +18492,7 @@ function arcGooWorldStep(dt) {
       const damp = shelfOrHeld ? 0.93 : b.stuck ? 0.975 : ARC_GOO_WATER;
       const gg = b.held ? 0 : b.shelf ? -gh * 0.35 : b.stuck ? gh * ARC_GOO_STUCKG : gh * ARC_GOO_FLYG;
       let sway = b.stuck || shelfOrHeld ? 0 : Math.sin(st.t * 1.1 + b.cy * 0.02) * gh * 0.06; // 水の流れ
-      if (b.shelf && !b.held) sway = Math.max(-0.03, Math.min(0.03, (ARC_GOO_CX - b.cx) * 0.0012));
+      if (b.shelf && !b.held && b.tx !== undefined) sway = Math.max(-0.12, Math.min(0.12, (b.tx - b.cx) * 0.004));
       let hx = 0, hy = 0;
       if (b.held && st.pull) { const hs = arcGooHoldSpot(b, st.pull); hx = (hs.x - b.cx) * 0.05; hy = (hs.y - b.cy) * 0.05; }
       for (let i = 0; i < b.n; i++) {
@@ -18640,7 +18652,10 @@ function arcGooMerge(a, b) {
     const nr = ARC_GOO_LEVELS[nl].r * 0.6;
     const nb = arcGooMake(nl, Math.max(ARC_GOO_L + nr, Math.min(ARC_GOO_R - nr, x)), Math.max(ARC_GOO_T + nr, Math.min(y, ARC_GOO_B - nr)), 0.75);
     nb.born = 0; nb.dropT = 2;
-    if (a.shelf && b.shelf) nb.shelf = true; else nb.stuck = true; // たなどうしの合体はたなに残る
+    if (a.shelf && b.shelf) { // たなどうしの合体はたなに残る（列の順番は前の方を引きつぐ。天井の高さへ）
+      nb.shelf = true; nb.qi = Math.min(a.qi, b.qi);
+      const dy = ARC_GOO_T + nr / 0.6 * 0.75 + 2 - nb.cy; for (let i = 0; i < nb.n; i++) { nb.y[i] += dy; nb.oy[i] += dy; } arcGooBox(nb);
+    } else nb.stuck = true;
     gain = ARC_GOO_LEVELS[nl].v; st.maxLvl = Math.max(st.maxLvl, nl);
     arcSfx(nl >= 8 ? 'fanfare' : 'eat');
   }
