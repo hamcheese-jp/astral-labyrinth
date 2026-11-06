@@ -18272,7 +18272,7 @@ const ARC_GOO_L = 22, ARC_GOO_R = 418, ARC_GOO_B = 596, ARC_GOO_T = 100;
 const ARC_GOO_LY = 178;            // 出口（左右のかべ）の高さ。上の方から出てくる
 const ARC_GOO_MAXV = 820, ARC_GOO_PULLK = 5.5; // 飛ばす速さの上限・引いた長さ→速さ（水の中なので遅め）
 // 水の中：飛んでいる間のブレーキ（小さく分けた1回ごと）・浮く分だけ軽い重さ・くっついたあとの重さ
-const ARC_GOO_WATER = 0.991, ARC_GOO_FLYG = 0.42, ARC_GOO_STUCKG = 0.26;
+const ARC_GOO_WATER = 0.991, ARC_GOO_FLYG = 0.42, ARC_GOO_STUCKG = 0.55;
 // 段ごとの色（v は点数の元）。大きさは1段ごとに約1.19倍
 const ARC_GOO_LEVELS = [
   { v: 2, col: '#f43f5e' }, { v: 4, col: '#fb923c' }, { v: 8, col: '#facc15' }, { v: 16, col: '#4ade80' },
@@ -18444,7 +18444,7 @@ function arcGooWorldStep(dt) {
   for (let s = 0; s < ARC_GOO_SUB; s++) {
     for (const b of st.bodies) {
       // 水の中：飛んでいる間は水のブレーキで遅くなり、ふわっと沈む。くっついたあとは、ねばねば（強いブレーキ・弱い重さ）でゆっくりたれる
-      const damp = b.stuck ? 0.96 : ARC_GOO_WATER, gg = b.stuck ? gh * ARC_GOO_STUCKG : gh * ARC_GOO_FLYG;
+      const damp = b.stuck ? 0.975 : ARC_GOO_WATER, gg = b.stuck ? gh * ARC_GOO_STUCKG : gh * ARC_GOO_FLYG;
       const sway = b.stuck ? 0 : Math.sin(st.t * 1.1 + b.cy * 0.02) * gh * 0.06; // 水の流れ
       for (let i = 0; i < b.n; i++) {
         const vx = (b.x[i] - b.ox[i]) * damp, vy = (b.y[i] - b.oy[i]) * damp;
@@ -18494,12 +18494,14 @@ function arcGooShape(b) {
 function arcGooWalls(b) {
   let hit = false;
   for (let i = 0; i < b.n; i++) {
-    let c = false;
-    if (b.x[i] < ARC_GOO_L) { b.x[i] = ARC_GOO_L; c = true; }
-    else if (b.x[i] > ARC_GOO_R) { b.x[i] = ARC_GOO_R; c = true; }
-    if (b.y[i] > ARC_GOO_B) { b.y[i] = ARC_GOO_B; c = true; }
-    else if (b.y[i] < ARC_GOO_T) { b.y[i] = ARC_GOO_T; c = true; }
-    if (c) { b.ox[i] = b.x[i] - (b.x[i] - b.ox[i]) * 0.12; b.oy[i] = b.y[i] - (b.y[i] - b.oy[i]) * 0.12; hit = true; }
+    // 左右のかべ：横の動きは止めるが、たての動きは残す（自分の重さでずるずる下へすべる）
+    if (b.x[i] < ARC_GOO_L || b.x[i] > ARC_GOO_R) {
+      b.x[i] = b.x[i] < ARC_GOO_L ? ARC_GOO_L : ARC_GOO_R;
+      b.ox[i] = b.x[i] - (b.x[i] - b.ox[i]) * 0.12; b.oy[i] = b.y[i] - (b.y[i] - b.oy[i]) * 0.8; hit = true;
+    }
+    // 床：ぺたっと止まる。天井：くっつかずに離れて沈む
+    if (b.y[i] > ARC_GOO_B) { b.y[i] = ARC_GOO_B; b.ox[i] = b.x[i] - (b.x[i] - b.ox[i]) * 0.12; b.oy[i] = b.y[i]; hit = true; }
+    else if (b.y[i] < ARC_GOO_T) { b.y[i] = ARC_GOO_T; b.oy[i] = b.y[i]; hit = true; }
   }
   if (hit) arcGooStick(b);
 }
@@ -18542,8 +18544,9 @@ function arcGooCollide(pairsOut) {
         if (!inside && e.d2 > S * S) continue;
         touch++;
         // 外へ出す量（中なら全部、外の近くならくっつく分だけ少し引き寄せる）
+        // くっつく力は横向きが中心（下にすき間があれば、自分の重さで下へずれていく）
         const f = inside ? 0.5 : 0.1;
-        const dx = (e.x - px) * f, dy = (e.y - py) * f;
+        const dx = (e.x - px) * f, dy = (e.y - py) * (inside ? f : (e.y > py ? 0.1 : 0.015));
         P.x[i] += dx; P.y[i] += dy;
         const j = (e.i + 1) % Q.n;
         Q.x[e.i] -= dx * (1 - e.t); Q.y[e.i] -= dy * (1 - e.t);
@@ -19461,8 +19464,8 @@ setTimeout(checkCloudOnStartup, 300);
 // ############################################################################
 
 // ★ デプロイするたびに、ここの番号と日付を書き換えてください
-const GAME_VERSION = 'v2.33.2';
-const GAME_BUILD_DATE = '2026-11-05';
+const GAME_VERSION = 'v2.33.3';
+const GAME_BUILD_DATE = '2026-11-06';
 
 // ============================================================================
 // ① バージョン表示
