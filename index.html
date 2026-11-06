@@ -18546,6 +18546,7 @@ function arcGooCollide(pairsOut) {
         // 外へ出す量（中なら全部、外の近くならくっつく分だけ少し引き寄せる）
         // くっつく力は横向きが中心（下にすき間があれば、自分の重さで下へずれていく）
         const f = inside ? 0.5 : 0.1;
+        if (inside && e.d2 > Q.r * Q.r * 0.25) { const qc = arcGooCenter(Q), ox = px - qc.x, oy = py - qc.y, ol = Math.hypot(ox, oy) || 1; P.x[i] += ox / ol * 3; P.y[i] += oy / ol * 3; continue; }
         const dx = (e.x - px) * f, dy = (e.y - py) * (inside ? f : (e.y > py ? 0.1 : 0.015));
         P.x[i] += dx; P.y[i] += dy;
         const j = (e.i + 1) % Q.n;
@@ -18556,10 +18557,24 @@ function arcGooCollide(pairsOut) {
         }
       }
     }
-    if (touch) { arcGooStick(A); arcGooStick(C); }
+    if (touch) { arcGooStick(A); arcGooStick(C); arcGooSeparate(A, C); }
     if (pairsOut && touch >= 2 && A.lvl === C.lvl) pairsOut.push([A, C]);
   }
 }
+// めりこみ防止：真ん中どうしが近すぎたら、体ごと押し離す（小さい方がたくさん動く）。速くぶつかって小さいスライムが大きい方の中へ入りこむのを防ぐ
+function arcGooSeparate(A, C) {
+  const ca = arcGooCenter(A), cc = arcGooCenter(C);
+  const ra = Math.sqrt(Math.abs(arcGooArea(A)) / Math.PI), rc = Math.sqrt(Math.abs(arcGooArea(C)) / Math.PI);
+  let dx = cc.x - ca.x, dy = cc.y - ca.y, d = Math.hypot(dx, dy);
+  const want = (ra + rc) * 0.82;
+  if (d >= want) return;
+  if (d < 1e-3) { dx = 0; dy = 1; d = 1; }
+  const over = (want - d) * 0.35, wa = rc * rc / (ra * ra + rc * rc), wc = 1 - wa;
+  const ux = dx / d, uy = dy / d;
+  for (let i = 0; i < A.n; i++) { A.x[i] -= ux * over * wa; A.y[i] -= uy * over * wa; }
+  for (let i = 0; i < C.n; i++) { C.x[i] += ux * over * wc; C.y[i] += uy * over * wc; }
+}
+function arcGooCenter(b) { let x = 0, y = 0; for (let i = 0; i < b.n; i++) { x += b.x[i]; y += b.y[i]; } return { x: x / b.n, y: y / b.n }; }
 // 合体：2つのスライムを消して、重さの真ん中に次の数字のスライムを作る
 function arcGooMerge(a, b) {
   const st = arcGooSt;
@@ -19464,7 +19479,7 @@ setTimeout(checkCloudOnStartup, 300);
 // ############################################################################
 
 // ★ デプロイするたびに、ここの番号と日付を書き換えてください
-const GAME_VERSION = 'v2.33.3';
+const GAME_VERSION = 'v2.33.4';
 const GAME_BUILD_DATE = '2026-11-06';
 
 // ============================================================================
